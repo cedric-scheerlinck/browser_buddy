@@ -1,261 +1,331 @@
-// Background script for Browser Buddy
+/**
+ * Browser Buddy - Background Script
+ * 
+ * This script handles communication between content scripts and the Claude API.
+ * It manages connections, API keys, and system prompts.
+ */
 
-console.log('Browser Buddy background script loaded', new Date().toISOString());
+// ==================== GLOBAL STATE ====================
 
-// Initialize connection status tracking
+// API and prompt settings
+let apiKey = '';
+let systemPrompt = '';
+
+// Tab connection tracking
 const connections = {};
 
-// Store API key in memory
-let apiKey = '';
+// ==================== INITIALIZATION ====================
 
-// Function to load API key from storage or use a hardcoded one for testing
-async function loadApiKey() {
-    console.log('Attempting to load API key');
-
-    try {
-        // First try to get from Chrome storage
-        if (chrome.storage && chrome.storage.local) {
-            const data = await chrome.storage.local.get('claudeApiKey');
-            if (data && data.claudeApiKey) {
-                apiKey = data.claudeApiKey;
-                console.log('API key loaded from storage successfully');
-                return true;
-            }
-        }
-
-        // For debugging, directly use the API key as fallback
-        // In production, you should implement a more secure method
-        console.log('API key loaded from fallback');
-
-        // Save to storage for future use
-        if (chrome.storage && chrome.storage.local) {
-            await chrome.storage.local.set({ 'claudeApiKey': apiKey });
-            console.log('API key saved to storage');
-        }
-
-        return true;
-    } catch (error) {
-        console.error('Error loading API key:', error);
-        return false;
-    }
-}
-
-// Function to notify that background is alive
-function pingContentScripts() {
-    chrome.tabs.query({}, tabs => {
-        tabs.forEach(tab => {
-            try {
-                chrome.tabs.sendMessage(tab.id, { action: "backgroundAlive" })
-                    .catch(err => console.log(`Cannot reach tab ${tab.id}:`, err.message));
-            } catch (e) {
-                // Ignore errors for tabs that can't be messaged
-            }
-        });
-    });
-}
-
-// Load API key when background script starts and ping content scripts
-(async function init() {
+/**
+ * Initialize the background script
+ * Loads API key, system prompt, and sets up ping
+ */
+async function initialize() {
+  console.log('Browser Buddy background script loaded', new Date().toISOString());
+  
+  try {
     await loadApiKey();
-    console.log('Initial API key loaded, first 4 chars:', apiKey.substring(0, 4) + '...');
-
-    // Ping content scripts every 15 seconds
+    await loadSystemPrompt();
+    console.log('Initialization complete');
+    
+    // Set up regular pings to maintain content script connections
+    pingContentScripts(); // Initial ping
     setInterval(pingContentScripts, 15000);
-    pingContentScripts(); // Ping immediately too
-})();
+  } catch (error) {
+    console.error('Initialization error:', error);
+  }
+}
 
-// Handle tab connections
-chrome.runtime.onConnect.addListener(port => {
-    const tabId = port.sender.tab?.id;
-    if (tabId) {
-        console.log(`Tab ${tabId} connected via ${port.name}`);
-        connections[tabId] = port;
+// Run initialization on script load
+initialize();
 
-        port.onDisconnect.addListener(() => {
-            console.log(`Tab ${tabId} disconnected`);
-            delete connections[tabId];
-        });
-    }
-});
+// ==================== STORAGE AND CONFIGURATION ====================
 
-// Handle messages from content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    const tabId = sender.tab?.id;
-    console.log(`Background received message from tab ${tabId}:`, message.action);
+/**
+ * Load API key from Chrome storage
+ * @returns {Promise<boolean>} Success status
+ */
+async function loadApiKey() {
+  console.log('Loading API key');
 
-    // Handle ping/pong for connection testing
-    if (message.action === 'ping') {
-        console.log('Received ping, sending pong');
-        sendResponse({ success: true, action: 'pong' });
-        return false; // Synchronous response
-    }
-
-    if (message.action === 'callClaudeAPI') {
-        console.log('Calling Claude API with prompt:', message.prompt?.substring(0, 30) + '...');
-
-        // Make sure we respond even if there's an error
-        callClaudeAPI(message.prompt, message.history)
-            .then(response => {
-                console.log('Claude API response received');
-                try {
-                    sendResponse({ success: true, data: response });
-                } catch (error) {
-                    console.error('Error sending response:', error);
-                }
-            })
-            .catch(error => {
-                console.error('Error calling Claude API:', error);
-                try {
-                    sendResponse({ success: false, error: error.toString() });
-                } catch (sendError) {
-                    console.error('Error sending error response:', sendError);
-                }
-            });
-
-        // Return true to indicate we'll respond asynchronously
+  try {
+    // Try to get from Chrome storage
+    if (chrome.storage && chrome.storage.local) {
+      const data = await chrome.storage.local.get('claudeApiKey');
+      if (data && data.claudeApiKey) {
+        apiKey = data.claudeApiKey;
+        console.log('API key loaded from storage');
         return true;
+      }
     }
 
-    // Default handler for unknown actions
-    console.log('No handler for message action:', message.action);
-    sendResponse({ success: false, error: 'Unknown action' });
+    // If we reach here, no API key was found
+    console.warn('No API key found in storage');
     return false;
+  } catch (error) {
+    console.error('Error loading API key:', error);
+    return false;
+  }
+}
+
+/**
+ * Load system prompt from system_prompt.md
+ * @returns {Promise<boolean>} Success status
+ */
+async function loadSystemPrompt() {
+  console.log('Loading system prompt');
+  
+  try {
+    const response = await fetch('/system_prompt.md');
+    if (!response.ok) {
+      throw new Error(`Failed to load system prompt: ${response.status}`);
+    }
+    
+    systemPrompt = await response.text();
+    console.log('System prompt loaded successfully, length:', systemPrompt.length);
+    return true;
+  } catch (error) {
+    console.error('Error loading system prompt:', error);
+    systemPrompt = ''; // Set to empty string in case of error
+    return false;
+  }
+}
+
+// ==================== CONNECTION MANAGEMENT ====================
+
+/**
+ * Ping all content scripts to maintain connections
+ */
+function pingContentScripts() {
+  chrome.tabs.query({}, tabs => {
+    tabs.forEach(tab => {
+      try {
+        chrome.tabs.sendMessage(tab.id, { action: "backgroundAlive" })
+          .catch(err => {
+            // This is expected for tabs without content scripts
+            // console.log(`Cannot reach tab ${tab.id}:`, err.message);
+          });
+      } catch (e) {
+        // Ignore errors for tabs that can't be messaged
+      }
+    });
+  });
+}
+
+// ==================== MESSAGE HANDLING ====================
+
+/**
+ * Handle connections from tabs
+ */
+chrome.runtime.onConnect.addListener(port => {
+  const tabId = port.sender.tab?.id;
+  if (tabId) {
+    console.log(`Tab ${tabId} connected via ${port.name}`);
+    connections[tabId] = port;
+
+    port.onDisconnect.addListener(() => {
+      console.log(`Tab ${tabId} disconnected`);
+      delete connections[tabId];
+    });
+  }
 });
 
-// Function to call Claude API
-async function callClaudeAPI(prompt, history) {
-    console.log('callClaudeAPI function called');
-    console.log('Prompt length:', prompt?.length || 0, 'characters');
-    console.log('Prompt begins with:', prompt?.substring(0, 100) + '...');
-    console.log('Prompt ends with:', prompt?.substring(prompt.length - 100) + '...');
+/**
+ * Handle messages from content scripts
+ */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const tabId = sender.tab?.id;
+  const action = message.action || 'unknown';
+  
+  console.log(`Message received from tab ${tabId}: ${action}`);
 
-    // Claude API endpoint
-    const apiUrl = 'https://api.anthropic.com/v1/messages';
+  // Handle different message types
+  switch (action) {
+    case 'ping':
+      handlePing(sendResponse);
+      return false; // Synchronous response
+      
+    case 'callClaudeAPI':
+      handleClaudeAPICall(message, sendResponse);
+      return true; // Asynchronous response
+      
+    default:
+      console.log('No handler for message action:', action);
+      sendResponse({ success: false, error: 'Unknown action' });
+      return false;
+  }
+});
 
-    // Ensure API key is loaded
-    if (!apiKey) {
-        console.log('API key not found, attempting to load');
-        const loaded = await loadApiKey();
-        if (!loaded || !apiKey) {
-            const error = 'API key not available. Please check your configuration.';
-            console.error(error);
-            throw new Error(error);
-        }
-    }
+/**
+ * Handle ping message for connection testing
+ * @param {Function} sendResponse - Response callback
+ */
+function handlePing(sendResponse) {
+  console.log('Received ping, sending pong');
+  sendResponse({ success: true, action: 'pong' });
+}
 
-    console.log('Using API endpoint:', apiUrl);
-    console.log('API key available (first 4 chars):', apiKey.substring(0, 4) + '...');
+/**
+ * Handle Claude API call request
+ * @param {Object} message - Message with prompt and webpage content
+ * @param {Function} sendResponse - Response callback
+ */
+function handleClaudeAPICall(message, sendResponse) {
+  console.log('Handling Claude API call');
+  
+  // Validate required fields
+  if (!message.prompt) {
+    sendResponse({ success: false, error: 'Missing required field: prompt' });
+    return;
+  }
+  
+  // Log request details (abbreviated)
+  console.log('Prompt (first 30 chars):', message.prompt?.substring(0, 30) + '...');
+  console.log('Webpage content sections:', message.webpageContent?.length || 0);
 
-    // Extract the user's actual question and page content from the prompt
-    const promptLines = prompt.split('\n');
-    let userQuestion = '';
-    let pageContent = '';
-    let capturePageContent = false;
-
-    // Debug - log all prompt lines to see what we're working with
-    console.log('----DEBUG: FULL PROMPT LINES----');
-    for (let i = 0; i < promptLines.length; i++) {
-        console.log(`Line ${i + 1}: ${promptLines[i].substring(0, 100)}`);
-    }
-    console.log('----END DEBUG PROMPT LINES----');
-
-    for (const line of promptLines) {
-        if (line.startsWith('User asked:')) {
-            userQuestion = line.replace('User asked:', '').replace(/"/g, '').trim();
-        } else if (line.includes('content of the webpage')) {
-            capturePageContent = true;
-        } else if (line.includes('Please respond to the user')) {
-            capturePageContent = false;
-        } else if (capturePageContent && line.trim()) {
-            pageContent += line + '\n';
-        }
-    }
-
-    console.log('Extracted user question:', userQuestion);
-    console.log('Extracted page content length:', pageContent.length);
-
-    // Debug - log full page content 
-    console.log('---- FULL PAGE CONTENT START ----');
-    // Print in chunks to avoid console truncation
-    const chunks = [];
-    for (let i = 0; i < pageContent.length; i += 1000) {
-        chunks.push(pageContent.substring(i, i + 1000));
-    }
-    chunks.forEach((chunk, i) => {
-        console.log(`Content chunk ${i + 1}/${chunks.length}: ${chunk}`);
+  // Call Claude API
+  callClaudeAPI(message.prompt, message.webpageContent)
+    .then(response => {
+      console.log('Claude API response received');
+      sendResponse({ success: true, data: response });
+    })
+    .catch(error => {
+      console.error('Error calling Claude API:', error);
+      sendResponse({ 
+        success: false, 
+        error: error.toString(),
+        message: 'Failed to get response from Claude API'
+      });
     });
-    console.log('---- FULL PAGE CONTENT END ----');
+}
 
-    // Create system message content
-    const systemContent = `You are Browser Buddy, an AI assistant helping users understand web content. 
-You have access to the current webpage content which is provided below. 
-When answering questions, refer to this content.
-ONLY answer questions based on the information provided in the webpage content.
-If the information is not in the page content, say so clearly.
+// ==================== CLAUDE API INTEGRATION ====================
 
-WEBPAGE CONTENT:
-${pageContent}`;
+/**
+ * Call Claude API with the given prompt and webpage content
+ * @param {string} prompt - The user's question/prompt
+ * @param {string[]} webpageContent - Array of webpage content sections
+ * @returns {Promise<string>} - Claude's response
+ */
+async function callClaudeAPI(prompt, webpageContent) {
+  console.log('Calling Claude API');
+  
+  // Claude API endpoint
+  const apiUrl = 'https://api.anthropic.com/v1/messages';
 
-    console.log('System content length:', systemContent.length);
-
-    // Prepare messages array for Claude API - user and assistant messages only
-    let messages = [];
-
-    // Add conversation history if it exists (but don't include system messages)
-    if (history && history.length > 0) {
-        console.log('Adding conversation history, length:', history.length);
-        messages = history.filter(msg => msg.role !== 'system').map(msg => ({
-            role: msg.role,
-            content: msg.content
-        }));
+  // Ensure API key is loaded
+  if (!apiKey) {
+    console.log('API key not found, attempting to load');
+    const loaded = await loadApiKey();
+    if (!loaded || !apiKey) {
+      throw new Error('API key not available. Please check your configuration.');
     }
+  }
 
-    // Add the user's question as the last user message
-    messages.push({
+  // Ensure system prompt is loaded
+  if (!systemPrompt) {
+    console.log('System prompt not found, attempting to load');
+    await loadSystemPrompt();
+    if (!systemPrompt) {
+      console.warn('System prompt could not be loaded, using default');
+      systemPrompt = 'You are Browser Buddy, an AI assistant helping users understand web content.';
+    }
+  }
+
+  // Process webpage content
+  const pageContentText = Array.isArray(webpageContent) 
+    ? webpageContent.join('\n') 
+    : webpageContent || '';
+  
+  // Format webpage content with XML structure
+  let formattedWebpageContent = '<documents>\n';
+  
+  if (Array.isArray(webpageContent) && webpageContent.length > 0) {
+    webpageContent.forEach((content, index) => {
+      formattedWebpageContent += `  <document index="${index + 1}">
+    <source>webpage_content</source>
+    <document_content>
+      ${content}
+    </document_content>
+  </document>\n`;
+    });
+  } else {
+    // Fallback if webpageContent is not an array or is empty
+    formattedWebpageContent += `  <document index="1">
+    <source>webpage_content</source>
+    <document_content>
+      ${pageContentText}
+    </document_content>
+  </document>\n`;
+  }
+  
+  formattedWebpageContent += '</documents>';
+  
+  // Log configuration details
+  console.log('API endpoint:', apiUrl);
+  console.log('API key available (first 4 chars):', apiKey.substring(0, 4) + '...');
+  console.log('System prompt length:', systemPrompt.length);
+  console.log('Documents content length:', formattedWebpageContent.length);
+
+  // Prepare request payload
+  const requestBody = {
+    model: 'claude-3-7-sonnet-latest',
+    max_tokens: 1000,
+    system: [
+      {
+        type: "text",
+        text: systemPrompt,
+        cache_control: {type: "ephemeral"}
+      },
+      {
+        type: "text",
+        text: formattedWebpageContent,
+        cache_control: {type: "ephemeral"}
+      }
+    ],
+    messages: [
+      {
         role: 'user',
-        content: userQuestion
-    });
-
-    // Debug the message structure
-    console.log('Number of messages being sent:', messages.length);
-    messages.forEach((msg, index) => {
-        console.log(`Message ${index + 1}:`,
-            `role: ${msg.role}, `,
-            `content starts with: ${msg.content.substring(0, 50)}...`);
-    });
-
-    try {
-        console.log('Sending request to Claude API');
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': apiKey,
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true'
-            },
-            body: JSON.stringify({
-                model: 'claude-3-7-sonnet-latest',
-                max_tokens: 1000,
-                system: systemContent,  // System content as a top-level parameter
-                messages: messages
-            })
-        });
-
-        console.log('Claude API response status:', response.status);
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API error response:', errorText);
-            throw new Error(`API error (${response.status}): ${errorText}`);
-        }
-
-        const data = await response.json();
-        console.log('API response received successfully');
-        console.log('Response starts with:', data.content[0].text.substring(0, 100) + '...');
-        return data.content[0].text;
-    } catch (error) {
-        console.error('Error in Claude API call:', error);
-        throw error;
+        content: prompt
+      }
+    ],
+    cache_control: {
+      save_history: true
     }
+  };
+
+  try {
+    console.log('Sending request to Claude API');
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    console.log('Claude API response status:', response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('API error response:', errorText);
+      throw new Error(`API error (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log('API response received successfully');
+    
+    if (!data.content || !data.content[0] || !data.content[0].text) {
+      throw new Error('Invalid response format from Claude API');
+    }
+    
+    console.log('Response length:', data.content[0].text.length);
+    return data.content[0].text;
+  } catch (error) {
+    console.error('Error in Claude API call:', error);
+    throw error;
+  }
 } 
