@@ -12,17 +12,17 @@ try {
 function extractTextFromDOM() {
   // Get all text elements that might contain substantial content
   const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, span, div, article, section');
-  
+
   // Store the text content of each element
   const textContent = [];
   let blockCounter = 0;
-  
+
   // Helper function to recursively extract text from an element and its descendants
   function extractTextFromElement(element) {
     // First check if this element has enough direct text to be considered a block
     let elementText = "";
     let hasSubstantialText = false;
-    
+
     // Get all text directly in this element (not in children)
     for (const node of element.childNodes) {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -32,16 +32,16 @@ function extractTextFromDOM() {
         }
       }
     }
-    
+
     elementText = elementText.trim();
-    
+
     // If the element has substantial direct text, add it as a block
     if (elementText.length >= 100) {
       hasSubstantialText = true;
-      
+
       // Add a unique class to the element for later reference
       const uniqueClass = `ai-content-block-${blockCounter}`;
-      
+
       // Preserve existing classes if they exist
       if (element.className) {
         // Check if the element already has the class (avoid duplicates)
@@ -51,44 +51,44 @@ function extractTextFromDOM() {
       } else {
         element.className = uniqueClass;
       }
-      
+
       textContent.push({
         text: elementText,
         element: element,  // Store reference to the element for future highlighting
         blockId: blockCounter  // Store the unique ID
       });
-      
+
       blockCounter++;
     }
-    
+
     // If this element doesn't have enough text of its own,
     // or if we want to also process children even if the parent has text,
     // recursively process child elements that aren't already processed
     if (!hasSubstantialText || true) {
       // Get child elements (not text nodes)
       const childElements = Array.from(element.children);
-      
+
       for (const childElement of childElements) {
         // Skip script, style, and other non-content elements
         const tagName = childElement.tagName.toLowerCase();
-        if (tagName === 'script' || tagName === 'style' || tagName === 'noscript' || 
-            tagName === 'svg' || tagName === 'path' || tagName === 'iframe') {
+        if (tagName === 'script' || tagName === 'style' || tagName === 'noscript' ||
+          tagName === 'svg' || tagName === 'path' || tagName === 'iframe') {
           continue;
         }
-        
+
         // Recursively extract text from the child element
         extractTextFromElement(childElement);
       }
     }
   }
-  
+
   // Process each top-level element
   textElements.forEach(element => {
     // Skip elements that are children of elements we've already processed
     // (to avoid processing the same content multiple times)
     let isChildOfProcessed = false;
     let parent = element.parentElement;
-    
+
     while (parent) {
       if (parent.className && parent.className.includes('ai-content-block-')) {
         isChildOfProcessed = true;
@@ -96,12 +96,12 @@ function extractTextFromDOM() {
       }
       parent = parent.parentElement;
     }
-    
+
     if (!isChildOfProcessed) {
       extractTextFromElement(element);
     }
   });
-  
+
   console.log(`AI Content Detector: Found ${textContent.length} text blocks on the page`);
   return textContent;
 }
@@ -121,28 +121,28 @@ function getTextContent() {
 function highlightOddBlocks() {
   const blocks = getTextContent();
   let styleAdded = false;
-  
+
   // First, check if our style element already exists
   let styleEl = document.getElementById('ai-detector-styles');
-  
+
   // If not, create it
   if (!styleEl) {
     styleEl = document.createElement('style');
     styleEl.id = 'ai-detector-styles';
     document.head.appendChild(styleEl);
   }
-  
+
   // Set the CSS content to highlight odd blocks
   styleEl.textContent = `
-    ${Array.from({ length: Math.ceil(blocks.length / 2) }, (_, i) => 
-      `.ai-content-block-${i * 2 + 1}`).join(', ')} {
+    ${Array.from({ length: Math.ceil(blocks.length / 2) }, (_, i) =>
+    `.ai-content-block-${i * 2 + 1}`).join(', ')} {
       background-color: rgba(255, 0, 0, 0.2) !important;
       border: 1px solid red !important;
       padding: 5px !important;
       transition: background-color 0.3s ease !important;
     }
   `;
-  
+
   console.log("Applied red background to odd-numbered blocks");
   return blocks.length;
 }
@@ -159,12 +159,12 @@ function resetHighlighting() {
 // Set up message listener to communicate with popup.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Content script received message:", message);
-  
+
   if (message.action === "extractText") {
     try {
       // Extract text from the page
       const textBlocks = getTextContent();
-      
+
       // Send response back to popup
       sendResponse({
         success: true,
@@ -179,24 +179,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       console.error("Error processing message:", error);
       sendResponse({ success: false, error: error.message });
     }
-    
+
     return true; // Required for asynchronous sendResponse
   }
-  
+
   // Respond to ping messages to check if content script is loaded
   if (message.action === "ping") {
     sendResponse({ success: true, message: "Content script is active" });
     return true;
   }
-  
+
   // Handle highlighting odd blocks
   if (message.action === "highlightOdd") {
     try {
       const blocksCount = highlightOddBlocks();
-      sendResponse({ 
-        success: true, 
+      sendResponse({
+        success: true,
         message: `Highlighted odd-numbered blocks with red background`,
-        count: blocksCount 
+        count: blocksCount
       });
     } catch (error) {
       console.error("Error highlighting odd blocks:", error);
@@ -204,7 +204,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return true;
   }
-  
+
   // Handle resetting highlighting
   if (message.action === "resetHighlighting") {
     try {
@@ -222,7 +222,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 document.addEventListener('DOMContentLoaded', () => {
   // Pre-cache the text content
   getTextContent();
-  
+
   // For now, just log the first few text blocks to the console
   console.log("Text content samples:");
   const pageText = getTextContent();
