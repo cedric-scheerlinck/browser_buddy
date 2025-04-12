@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Content Detector</title>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>AI Content Detector</h1>
+    <p>Click the button below to scan this page for AI-generated content.</p>
+    <button id="scanPage">Scan This Page</button>
+    <div id="status"></div>
+    
+    <div id="results-container">
+      <h2>Extracted Text</h2>
+      <div id="text-results">
+        <p class="placeholder">Scan a page to see text blocks...</p>
+      </div>
+      <button id="toggleResults" style="display: none;">Show/Hide Text</button>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html> 
