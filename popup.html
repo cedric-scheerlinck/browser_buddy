@@ -18,7 +18,11 @@
         <input type="checkbox" id="dryRunOption" name="dryRunOption">
         <label for="dryRunOption">Dry run (no API request)</label>
       </div>
-      <button id="analyzeWithClaude" class="action-button claude-button">Analyze First Block</button>
+      <div class="option-row">
+        <label for="blockCount">Number of blocks to analyze:</label>
+        <input type="number" id="blockCount" name="blockCount" min="1" max="100" value="5">
+      </div>
+      <button id="analyzeWithClaude" class="action-button claude-button">Analyze Blocks</button>
     </div>
     
     <div id="results-container">

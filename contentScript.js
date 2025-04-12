@@ -163,58 +163,154 @@ function resetHighlighting() {
 }
 
 // Function to analyze text with Claude API via background script
-async function analyzeTextWithClaude(textBlocks, isDryRun = false) {
+async function analyzeTextWithClaude(textBlocks, isDryRun = false, blockCount = 1) {
   try {
-    // Only analyze the first block for simplicity
-    const blockToAnalyze = textBlocks[0];
+    // Ensure blockCount is at least 1 and not more than available blocks
+    blockCount = Math.max(1, Math.min(blockCount, textBlocks.length));
     
-    if (!blockToAnalyze || !blockToAnalyze.text) {
-      throw new Error("No text to analyze");
-    }
+    // Select the blocks to analyze (take the first N blocks based on blockCount)
+    const blocksToAnalyze = textBlocks.slice(0, blockCount);
     
-    // Extract the block ID to associate with the response
-    const blockId = blockToAnalyze.blockId;
-    const blockText = blockToAnalyze.text;
+    console.log(`Analyzing ${blockCount} blocks${isDryRun ? " (dry run)" : ""} in parallel...`);
     
-    console.log(`Requesting analysis for block ${blockId}${isDryRun ? " (dry run)" : ""}...`);
-    
-    // Prepare the message to send to background script
-    const message = {
-      action: "analyzeWithClaude",
-      blockText: blockText,
-      blockId: blockId,
-      dryRun: isDryRun
-    };
-    
-    // Log what we're sending to the background script
-    console.log("Sending request to background script:", {
-      ...message,
-      blockTextPreview: blockText.length > 100 ? 
-        blockText.substring(0, 100) + '...' : blockText
-    });
-    
-    // Send message to background script to perform the analysis
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, function(response) {
-        if (chrome.runtime.lastError) {
-          console.error("Error communicating with background script:", chrome.runtime.lastError);
-          reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
-          return;
-        }
-        
-        if (response && response.success) {
-          console.log("Received successful response from background script");
-          resolve(response.analysis);
-        } else {
-          console.error("Received error response from background script:", response?.error || "Unknown error");
-          reject(new Error(response ? response.error : "Unknown error from background script"));
-        }
+    // Create an array of promises for each block analysis
+    const analysisPromises = blocksToAnalyze.map(async (blockToAnalyze, index) => {
+      if (!blockToAnalyze || !blockToAnalyze.text) {
+        console.warn(`Block at index ${index} has no text, skipping`);
+        return null;
+      }
+      
+      // Extract the block ID to associate with the response
+      const blockId = blockToAnalyze.blockId;
+      const blockText = blockToAnalyze.text;
+      
+      console.log(`Requesting analysis for block ${blockId} (${index+1}/${blockCount})${isDryRun ? " (dry run)" : ""}...`);
+      
+      // Prepare the message to send to background script
+      const message = {
+        action: "analyzeWithClaude",
+        blockText: blockText,
+        blockId: blockId,
+        dryRun: isDryRun
+      };
+      
+      // Log what we're sending to the background script
+      console.log("Sending request to background script:", {
+        ...message,
+        blockTextPreview: blockText.length > 100 ? 
+          blockText.substring(0, 100) + '...' : blockText
       });
+      
+      // Send message to background script to perform the analysis
+      try {
+        return await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(message, function(response) {
+            if (chrome.runtime.lastError) {
+              console.error("Error communicating with background script:", chrome.runtime.lastError);
+              reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
+              return;
+            }
+            
+            if (response && response.success) {
+              console.log(`Received successful response from background script for block ${blockId}`);
+              resolve(response.analysis);
+            } else {
+              console.error("Received error response from background script:", response?.error || "Unknown error");
+              reject(new Error(response ? response.error : "Unknown error from background script"));
+            }
+          });
+        });
+      } catch (error) {
+        console.error(`Error analyzing block ${blockId}:`, error);
+        return null; // Return null for failed blocks so we can filter them out later
+      }
     });
+    
+    // Wait for all analysis promises to resolve
+    const results = await Promise.all(analysisPromises);
+    
+    // Filter out null results (from blocks that failed or were skipped)
+    const validResults = results.filter(result => result !== null);
+    
+    console.log(`Completed parallel analysis of ${validResults.length} blocks`);
+    return validResults;
   } catch (error) {
     console.error("Error in analyzeTextWithClaude:", error);
     throw error;
   }
+}
+
+// Function to highlight a block based on its AI confidence score
+function highlightBlockWithScore(blockId, score) {
+  // First, find our style element or create it if it doesn't exist
+  let styleEl = document.getElementById('ai-detector-styles');
+  
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'ai-detector-styles';
+    document.head.appendChild(styleEl);
+  }
+  
+  // Determine the color based on the score
+  let backgroundColor, borderColor;
+  
+  if (score <= 50) {
+    backgroundColor = 'rgba(39, 174, 96, 0.2)'; // Green with transparency
+    borderColor = '#27ae60';
+  } else if (score <= 75) {
+    backgroundColor = 'rgba(243, 156, 18, 0.2)'; // Yellow with transparency
+    borderColor = '#f39c12';
+  } else {
+    backgroundColor = 'rgba(231, 76, 60, 0.2)'; // Red with transparency
+    borderColor = '#e74c3c';
+  }
+  
+  // Create a specific style for this block
+  const blockClass = `.ai-content-block-${blockId}`;
+  const scoreStyle = `
+    ${blockClass} {
+      background-color: ${backgroundColor} !important;
+      border: 2px solid ${borderColor} !important;
+      border-radius: 4px !important;
+      padding: 5px !important;
+      transition: background-color 0.3s ease !important;
+      position: relative !important;
+    }
+    
+    ${blockClass}::after {
+      content: "AI: ${score}%";
+      position: absolute;
+      top: 0;
+      right: 0;
+      background-color: ${borderColor};
+      color: white;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: bold;
+      border-bottom-left-radius: 4px;
+    }
+  `;
+  
+  // Add the style to our style element
+  // Keep any existing styles for other blocks
+  const existingStyles = styleEl.textContent;
+  if (!existingStyles.includes(blockClass)) {
+    styleEl.textContent = existingStyles + scoreStyle;
+  } else {
+    // Replace existing style for this block
+    const regex = new RegExp(`${blockClass} \\{[^}]+\\}\\s*${blockClass}::after \\{[^}]+\\}`, 'g');
+    styleEl.textContent = existingStyles.replace(regex, scoreStyle);
+  }
+  
+  console.log(`Highlighted block ${blockId} with score ${score}%`);
+  
+  // Scroll to the block to make it visible
+  const blockElement = document.querySelector(blockClass);
+  if (blockElement) {
+    blockElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  
+  return true;
 }
 
 // Set up message listener to communicate with popup.js
@@ -295,16 +391,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Check if this is a dry run
       const isDryRun = message.dryRun === true;
       
-      console.log(`${isDryRun ? "Dry run" : "Analysis"} requested for the first text block`);
+      // Get the number of blocks to analyze
+      const blockCount = message.blockCount || 1;
       
-      // Call the Claude API (or dry run) for the first block only via background script
-      analyzeTextWithClaude(textBlocks, isDryRun)
-        .then(result => {
+      console.log(`${isDryRun ? "Dry run" : "Analysis"} requested for ${blockCount} text block(s) in parallel`);
+      
+      // Call the Claude API (or dry run) for the specified number of blocks via background script
+      analyzeTextWithClaude(textBlocks, isDryRun, blockCount)
+        .then(results => {
           sendResponse({
             success: true,
-            analysis: result,
-            blockId: result.blockId,
+            analysis: results,
             blockCount: textBlocks.length,
+            analyzedCount: results.length,
             dryRun: isDryRun
           });
         })
@@ -321,6 +420,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: error.message });
       return true;
     }
+  }
+  
+  // Add a handler for the highlightBlockWithScore message
+  if (message.action === "highlightBlockWithScore") {
+    try {
+      const result = highlightBlockWithScore(message.blockId, message.score);
+      sendResponse({ success: true, message: `Highlighted block ${message.blockId} with score ${message.score}%` });
+    } catch (error) {
+      console.error("Error highlighting block with score:", error);
+      sendResponse({ success: false, error: error.message });
+    }
+    return true;
   }
 });
 

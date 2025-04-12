@@ -192,10 +192,13 @@ document.addEventListener('DOMContentLoaded', function() {
       // Check if dry run is enabled
       const isDryRun = document.getElementById('dryRunOption').checked;
       
+      // Get the number of blocks to analyze
+      const blocksToAnalyze = parseInt(document.getElementById('blockCount').value, 10) || 1;
+      
       // Update status
       statusDiv.textContent = isDryRun 
-        ? "Analyzing first text block with Claude (Dry Run)..." 
-        : "Analyzing first text block with Claude...";
+        ? `Analyzing ${blocksToAnalyze} text block(s) with Claude (Dry Run)...` 
+        : `Analyzing ${blocksToAnalyze} text block(s) with Claude...`;
       statusDiv.style.backgroundColor = "#fff3cd";
       
       // Disable button during analysis
@@ -204,7 +207,11 @@ document.addEventListener('DOMContentLoaded', function() {
       // Send message to content script to analyze text
       chrome.tabs.sendMessage(
         tab.id,
-        { action: "analyzeWithClaude", dryRun: isDryRun },
+        { 
+          action: "analyzeWithClaude", 
+          dryRun: isDryRun,
+          blockCount: blocksToAnalyze 
+        },
         function(response) {
           // Re-enable button
           analyzeWithClaudeButton.disabled = false;
@@ -219,8 +226,8 @@ document.addEventListener('DOMContentLoaded', function() {
           if (response && response.success) {
             // Show the analysis
             statusDiv.textContent = isDryRun
-              ? `Dry run complete for block #${response.blockId}! Check console for details.`
-              : `Analysis complete for block #${response.blockId}!`;
+              ? `Dry run complete for ${response.analyzedCount} block(s)! Check console for details.`
+              : `Analysis complete for ${response.analyzedCount} block(s)!`;
             statusDiv.style.backgroundColor = "#d4edda";
             
             // Display the analysis results (for both dry run and real results)
@@ -252,25 +259,106 @@ document.addEventListener('DOMContentLoaded', function() {
       // Clear previous results
       analysisResultsDiv.innerHTML = '';
       
-      // Get the content from Claude's response
-      const analysisText = analysis.content[0].text;
+      // Check if we have an array of analyses or a single analysis
+      const analysisArray = Array.isArray(analysis) ? analysis : [analysis];
       
-      // Get the block ID if available
-      const blockId = analysis.blockId !== undefined ? analysis.blockId : 'unknown';
-      
-      // Create a heading showing which block was analyzed
-      const blockHeading = document.createElement('h3');
-      blockHeading.className = 'block-id-heading';
-      blockHeading.textContent = `Analysis of Block #${blockId}`;
-      analysisResultsDiv.appendChild(blockHeading);
-      
-      // Create a div for the analysis
-      const analysisDiv = document.createElement('div');
-      analysisDiv.className = 'claude-analysis';
-      analysisDiv.innerHTML = `<p>${analysisText.replace(/\n/g, '<br>')}</p>`;
-      
-      // Add to the results div
-      analysisResultsDiv.appendChild(analysisDiv);
+      // Process each analysis result
+      analysisArray.forEach(analysisItem => {
+        // Get the content from Claude's response
+        const analysisText = analysisItem.content[0].text;
+        
+        // Extract the confidence score using regex
+        let confidenceScore = null;
+        const scoreRegex = /(\d+)%/g;
+        const matches = [...analysisText.matchAll(scoreRegex)];
+        
+        // If we found matches, use the last one (which should be the final score)
+        if (matches.length > 0) {
+          const lastMatch = matches[matches.length - 1];
+          confidenceScore = parseInt(lastMatch[1], 10);
+          console.log(`Extracted confidence score: ${confidenceScore}%`);
+        } else {
+          // Alternative: try to get the last word if it ends with %
+          const words = analysisText.trim().split(/\s+/);
+          const lastWord = words[words.length - 1];
+          if (lastWord.endsWith('%')) {
+            confidenceScore = parseInt(lastWord.replace('%', ''), 10);
+            console.log(`Extracted confidence score from last word: ${confidenceScore}%`);
+          }
+        }
+        
+        // Get the block ID if available
+        const blockId = analysisItem.blockId !== undefined ? analysisItem.blockId : 'unknown';
+        
+        // Create a heading showing which block was analyzed
+        const blockHeading = document.createElement('h3');
+        blockHeading.className = 'block-id-heading';
+        blockHeading.textContent = `Analysis of Block #${blockId}`;
+        analysisResultsDiv.appendChild(blockHeading);
+        
+        // Create a div for the analysis
+        const analysisDiv = document.createElement('div');
+        analysisDiv.className = 'claude-analysis';
+        
+        // Add confidence score display if found
+        if (confidenceScore !== null) {
+          // Determine background color based on score
+          let scoreColor;
+          let textColor = 'white';
+          
+          if (confidenceScore <= 50) {
+            scoreColor = '#27ae60'; // Green (low AI probability)
+          } else if (confidenceScore <= 75) {
+            scoreColor = '#f39c12'; // Yellow (medium AI probability)
+          } else {
+            scoreColor = '#e74c3c'; // Red (high AI probability)
+          }
+          
+          // Create confidence score display
+          const scoreDisplay = document.createElement('div');
+          scoreDisplay.className = 'confidence-score';
+          scoreDisplay.style.backgroundColor = scoreColor;
+          scoreDisplay.style.color = textColor;
+          scoreDisplay.style.padding = '10px';
+          scoreDisplay.style.marginBottom = '15px';
+          scoreDisplay.style.borderRadius = '5px';
+          scoreDisplay.style.textAlign = 'center';
+          scoreDisplay.style.fontWeight = 'bold';
+          scoreDisplay.innerHTML = `AI Confidence Score: <span style="font-size: 1.2em;">${confidenceScore}%</span>`;
+          
+          // Add score display to the analysis div
+          analysisDiv.appendChild(scoreDisplay);
+        }
+        
+        // Add the full analysis text
+        const textDiv = document.createElement('div');
+        textDiv.innerHTML = `<p>${analysisText.replace(/\n/g, '<br>')}</p>`;
+        analysisDiv.appendChild(textDiv);
+        
+        // Add to the results div
+        analysisResultsDiv.appendChild(analysisDiv);
+        
+        // Add a separator between analyses if not the last one
+        if (analysisItem !== analysisArray[analysisArray.length - 1]) {
+          const separator = document.createElement('hr');
+          separator.style.margin = '20px 0';
+          analysisResultsDiv.appendChild(separator);
+        }
+        
+        // If we have a confidence score, also update the block's style on the page
+        if (confidenceScore !== null && analysisItem.blockId !== undefined && !analysisItem.dryRun) {
+          // Send message to content script to highlight the block
+          chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+            if (tabs[0]) {
+              chrome.tabs.sendMessage(tabs[0].id, {
+                action: "highlightBlockWithScore",
+                blockId: analysisItem.blockId,
+                score: confidenceScore
+              });
+            }
+          });
+        }
+      });
       
       // Scroll to the analysis container
       analysisContainer.scrollIntoView({ behavior: 'smooth' });

@@ -37,66 +37,16 @@ async function loadClaudeApiKey() {
 // Function to analyze text with Claude API
 async function analyzeTextWithClaude(blockText, blockId, isDryRun = false) {
   try {
-    // If this is a dry run, just log what would be sent and return
-    if (isDryRun) {
-      // Create the request object that would be sent
-      const mockRequest = {
-        url: 'https://api.anthropic.com/v1/messages',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': 'sk-ant-api0x-would-be-real-key-in-actual-request',
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': true
-        },
-        body: {
-          model: "claude-3-7-sonnet-20250219",
-          max_tokens: 1000,
-          messages: [
-            {
-              role: "user",
-              content: `Analyze the following text and determine if it appears to be AI-generated or human-written. 
-              Consider factors like:
-              - Repetitive patterns or phrasing
-              - Overly formal or stilted language
-              - Lack of personal voice or perspective
-              - Unnatural transitions or flow
-              
-              Give a confidence score as a percentage for your determination, and explain your reasoning.
-              
-              TEXT TO ANALYZE:
-              ${blockText}`
-            }
-          ]
-        }
-      };
-      
-      console.log("DRY RUN - Would analyze text block with Claude:");
-      console.log(`Block ID: ${blockId}`);
-      console.log("Complete API request that would be sent:", mockRequest);
-      console.log(`Full text to analyze (${blockText.length} chars):`, blockText);
-      
-      // Return a mock response for dry run that includes the block ID
-      return {
-        dryRun: true,
-        blockId: blockId,
-        model: "claude-3-7-sonnet-20250219",
-        content: [{ 
-          text: `This is a dry run for block ID ${blockId}. No actual analysis was performed.\n\nIf this were a real analysis, Claude would determine whether the text appears to be AI-generated or human-written and provide a confidence score.`
-        }]
-      };
-    }
-    
-    // Load API key for real requests
+    // Load API key (for both dry run and real requests)
     const apiKey = await loadClaudeApiKey();
     
     if (!apiKey) {
       throw new Error("Failed to load Claude API key. Please check key.txt file.");
     }
     
-    console.log(`Analyzing block ${blockId} with Claude...`);
+    console.log(`${isDryRun ? "Dry run for" : "Analyzing"} block ${blockId} with Claude...`);
     
-    // Create the request configuration
+    // Create the request configuration - same for both dry run and real requests
     const requestConfig = {
       method: 'POST',
       headers: {
@@ -117,9 +67,12 @@ async function analyzeTextWithClaude(blockText, blockId, isDryRun = false) {
             - Overly formal or stilted language
             - Lack of personal voice or perspective
             - Unnatural transitions or flow
+
+            Note that I am just copy pasting direct from the web, so be lenient about special characters, symbols and formatting.
             
-            Give a confidence score as a percentage for your determination, and explain your reasoning.
-            
+            Explain your reasoning and finally give an estimated probability that the text is AI-generated from 0 to 100 
+            with a % sign (so we can regex it later) and have the last word of the text be the confidence score. for example: 50%
+
             TEXT TO ANALYZE:
             ${blockText}`
           }
@@ -127,16 +80,33 @@ async function analyzeTextWithClaude(blockText, blockId, isDryRun = false) {
       })
     };
     
-    // Log the complete request (with apiKey partially redacted for security)
+    // Log the complete request (with apiKey redacted for security)
     const logSafeConfig = JSON.parse(JSON.stringify(requestConfig));
-    logSafeConfig.headers['x-api-key'] = apiKey.substring(0, 10) + '...[REDACTED]';
-    console.log('Complete API request being sent:', {
+    logSafeConfig.headers['x-api-key'] = '[REDACTED]';
+    console.log(`${isDryRun ? "DRY RUN - Would send" : "Sending"} API request:`, {
       url: 'https://api.anthropic.com/v1/messages',
       ...logSafeConfig,
       // Also log parsed body for better readability
       parsedBody: JSON.parse(requestConfig.body)
     });
     
+    // In dry run mode, return a mock response instead of making the API call
+    if (isDryRun) {
+      console.log(`DRY RUN - Full text that would be analyzed (${blockText.length} chars):`, blockText);
+      console.log("DRY RUN - Not sending actual request to API");
+      
+      // Return a mock response
+      return {
+        dryRun: true,
+        blockId: blockId,
+        model: "claude-3-7-sonnet-20250219",
+        content: [{ 
+          text: `This is a dry run for block ID ${blockId}. No actual analysis was performed.\n\nIf this were a real analysis, Claude would determine whether the text appears to be AI-generated or human-written and provide a confidence score.`
+        }]
+      };
+    }
+    
+    // Only execute this part for real requests (not dry runs)
     // Prepare the request to Claude API
     const response = await fetch('https://api.anthropic.com/v1/messages', requestConfig);
     
