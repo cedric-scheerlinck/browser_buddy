@@ -1,5 +1,76 @@
 console.log("Browser Buddy Chat Script Loaded!");
 
+// --- Connection to background script ---
+let isBackgroundConnected = false;
+let connectionAttempts = 0;
+const MAX_CONNECTION_ATTEMPTS = 5;
+let connectionPort;
+
+// Connect to the background script
+function connectToBackground() {
+  try {
+    connectionPort = chrome.runtime.connect({ name: "chat-connection" });
+
+    connectionPort.onDisconnect.addListener(() => {
+      console.log("Connection to background lost, attempting to reconnect...");
+      isBackgroundConnected = false;
+      setTimeout(tryReconnect, 1000); // Try to reconnect after 1 second
+    });
+
+    // Ping the background script to verify connection
+    pingBackground();
+  } catch (error) {
+    console.error("Failed to connect to background script:", error);
+    setTimeout(tryReconnect, 1000);
+  }
+}
+
+// Try to reconnect to background
+function tryReconnect() {
+  if (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
+    connectionAttempts++;
+    console.log(`Reconnection attempt ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}`);
+    connectToBackground();
+  } else {
+    console.error("Max reconnection attempts reached. Please reload the extension.");
+  }
+}
+
+// Ping background script to check connection
+function pingBackground() {
+  chrome.runtime.sendMessage({ action: "ping" }, response => {
+    if (chrome.runtime.lastError) {
+      console.error("Background ping failed:", chrome.runtime.lastError);
+      isBackgroundConnected = false;
+      setTimeout(tryReconnect, 1000);
+      return;
+    }
+
+    if (response && response.action === "pong") {
+      console.log("Background connection confirmed");
+      isBackgroundConnected = true;
+      connectionAttempts = 0; // Reset counter on successful connection
+    } else {
+      console.error("Invalid ping response:", response);
+      isBackgroundConnected = false;
+      setTimeout(tryReconnect, 1000);
+    }
+  });
+}
+
+// Listen for background pings
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "backgroundAlive") {
+    isBackgroundConnected = true;
+    sendResponse({ received: true });
+    return true;
+  }
+  return false;
+});
+
+// Establish initial connection
+connectToBackground();
+
 // --- Create Toggle Button ---
 const toggleButton = document.createElement('button');
 toggleButton.id = 'browser-buddy-toggle';
@@ -72,69 +143,127 @@ console.log("Browser Buddy UI added to page.");
 
 // --- Extract Page Content (adapted from contentScript.js) ---
 function extractTextFromDOM() {
-  // Get all text elements that might contain substantial content
-  const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, div, article, section');
+  console.log("⏳ Extracting page content...");
 
-  // Store the text content of each element
-  const textContent = [];
+  // Get main content elements that are likely to contain the article/page content
+  const mainContent = document.querySelector('main') ||
+    document.querySelector('article') ||
+    document.querySelector('#content') ||
+    document.querySelector('#main');
 
-  // Helper function to recursively extract text from an element and its descendants
-  function extractTextFromElement(element) {
-    // First check if this element has enough direct text to be considered a block
-    let elementText = "";
+  // First try to get the page title
+  const pageTitle = document.title || "No title";
+  // Get page URL
+  const pageUrl = window.location.href;
 
-    // Get all text directly in this element (not in children)
-    for (const node of element.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const trimmedText = node.textContent.trim();
-        if (trimmedText) {
-          elementText += trimmedText + " ";
-        }
-      }
-    }
+  console.log(`Page title: ${pageTitle}`);
+  console.log(`Page URL: ${pageUrl}`);
 
-    elementText = elementText.trim();
+  // Store extracted text
+  const textContent = [`Page title: ${pageTitle}`, `Page URL: ${pageUrl}`];
 
-    // If the element has substantial direct text, add it as a block
-    if (elementText.length >= 50) {
-      textContent.push(elementText);
-    }
+  // Get all headings first to capture the structure
+  const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  console.log(`Found ${headings.length} headings`);
 
-    // Recursively process child elements
-    const childElements = Array.from(element.children);
-    for (const childElement of childElements) {
-      // Skip script, style, and other non-content elements
-      const tagName = childElement.tagName.toLowerCase();
-      if (tagName === 'script' || tagName === 'style' || tagName === 'noscript' ||
-        tagName === 'svg' || tagName === 'path' || tagName === 'iframe') {
-        continue;
-      }
-
-      // Recursively extract text from the child element
-      extractTextFromElement(childElement);
-    }
-  }
-
-  // Process each top-level element
-  textElements.forEach(element => {
-    let isChildOfProcessed = false;
-    let parent = element.parentElement;
-
-    // Skip processing children of elements we've already processed
-    while (parent) {
-      if (textContent.some(text => parent.textContent.includes(text))) {
-        isChildOfProcessed = true;
-        break;
-      }
-      parent = parent.parentElement;
-    }
-
-    if (!isChildOfProcessed) {
-      extractTextFromElement(element);
+  headings.forEach(heading => {
+    const headingText = heading.textContent.trim();
+    if (headingText) {
+      textContent.push(`Heading: ${headingText}`);
     }
   });
 
+  // Get all potential text elements
+  const textElements = document.querySelectorAll('p, li, td, th, div, section, article, aside, blockquote, pre, code, label');
+  console.log(`Found ${textElements.length} potential text elements`);
+
+  // Helper function to get meaningful text
+  function getCleanText(element) {
+    // Get direct text (not in children)
+    let text = '';
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        text += node.textContent + ' ';
+      }
+    }
+    return text.trim();
+  }
+
+  // Process important elements first
+  const paragraphs = document.querySelectorAll('p');
+  paragraphs.forEach(p => {
+    const text = p.textContent.trim();
+    if (text && text.length > 20) { // Only meaningful paragraphs
+      textContent.push(text);
+    }
+  });
+
+  // Process lists
+  const listItems = document.querySelectorAll('li');
+  listItems.forEach(li => {
+    const text = li.textContent.trim();
+    if (text && text.length > 10) {
+      textContent.push(`• ${text}`);
+    }
+  });
+
+  // Process other elements
+  textElements.forEach(element => {
+    // Skip very common elements that are unlikely to contain main content
+    if (element.tagName.toLowerCase() === 'div' || element.tagName.toLowerCase() === 'section') {
+      const text = getCleanText(element);
+      if (text && text.length > 100) { // Only substantial div/section direct text
+        textContent.push(text);
+      }
+    }
+  });
+
+  // If the targeted approach didn't get much, try a more brute force approach
+  if (textContent.length < 10) {
+    console.log("Not enough content found, trying alternative approach");
+
+    // Try to get main content
+    if (mainContent) {
+      const mainText = mainContent.innerText.split('\n').filter(line => line.trim().length > 0);
+      mainText.forEach(line => {
+        if (line.length > 20) {
+          textContent.push(line);
+        }
+      });
+    }
+
+    // Last resort: get all visible text
+    if (textContent.length < 10) {
+      console.log("Still not enough content, getting all body text");
+      const bodyText = document.body.innerText;
+      const bodyLines = bodyText.split('\n').filter(line => line.trim().length > 20);
+      bodyLines.forEach(line => {
+        if (!textContent.includes(line)) {
+          textContent.push(line);
+        }
+      });
+    }
+  }
+
   console.log(`Browser Buddy: Extracted ${textContent.length} text blocks from the page`);
+
+  // Debug: Log the first few text blocks if any
+  if (textContent.length > 0) {
+    console.log("Sample of extracted content:");
+    for (let i = 0; i < Math.min(10, textContent.length); i++) {
+      console.log(`Block ${i + 1} (${textContent[i].length} chars): ${textContent[i].substring(0, 100)}...`);
+    }
+
+    // Log full content for debugging
+    console.log("---- FULL EXTRACTED CONTENT START ----");
+    textContent.forEach((block, i) => {
+      console.log(`Block ${i + 1}: ${block}`);
+    });
+    console.log("---- FULL EXTRACTED CONTENT END ----");
+  } else {
+    console.warn("⚠️ No text content was extracted from the page!");
+  }
+
   return textContent;
 }
 
@@ -172,13 +301,25 @@ function handleSendMessage() {
   // Clear input field
   inputField.value = '';
 
+  // Check background connection
+  if (!isBackgroundConnected) {
+    addMessageToChat('assistant', 'Connection to background service is unavailable. Attempting to reconnect...');
+    pingBackground(); // Try to reconnect
+    return;
+  }
+
   // Display loading message
   const loadingMsgElement = addMessageToChat('assistant', 'Thinking...');
 
   // Extract page content
-  const pageContent = extractTextFromDOM().join('\n\n').substring(0, 5000); // Limit to 5000 characters
+  const pageContentArray = extractTextFromDOM();
+  const pageContent = pageContentArray.join('\n\n').substring(0, 5000); // Limit to 5000 characters
+  console.log(`Page content extracted (${pageContent.length} characters)`);
 
-  // Add to conversation history
+  // Debug: Log a sample of what's being sent
+  console.log("Sample of page content being sent:", pageContent.substring(0, 200) + "...");
+
+  // Add to conversation history - don't include the page content in the history
   conversationHistory.push({ role: 'user', content: userMessage });
 
   // Send message to Claude API
@@ -204,15 +345,14 @@ function handleSendMessage() {
       }
 
       // Display error message
-      addMessageToChat('assistant', 'Sorry, I encountered an error. Please try again.');
+      addMessageToChat('assistant', `Sorry, I encountered an error: ${error.message || 'Unknown error'}. Please try again.`);
     });
 }
 
 async function sendToClaudeAPI(userMessage, pageContent) {
-  // Claude API endpoint (this assumes a backend proxy; direct browser calls to API won't work due to CORS)
-  const apiUrl = 'https://api.anthropic.com/v1/messages';
+  console.log("Sending message to Claude API");
 
-  // Create prompt with user message and page content
+  // Create prompt with user message and page content - formatted for the background script to parse
   const prompt = `
 User asked: "${userMessage}"
 
@@ -222,27 +362,41 @@ ${pageContent}
 Please respond to the user's query based on the webpage content. Keep your response concise and focused on answering the question based on the page content.
 `;
 
-  try {
-    // Note: This won't work directly in a browser extension due to CORS restrictions
-    // You would need a background script or a backend server to make this call
-    // This is just an example of how the API call would be structured
-    const response = await chrome.runtime.sendMessage({
-      action: "callClaudeAPI",
-      prompt: prompt,
-      history: conversationHistory
-    });
+  console.log(`Full prompt size: ${prompt.length} characters`);
 
-    // In a real implementation, we'd handle the response from the background script
-    if (response && response.success) {
-      return response.data;
-    } else {
-      console.error("API call failed:", response?.error || "Unknown error");
-      return "I'm sorry, I couldn't process your request at this time. Please try again later.";
+  return new Promise((resolve, reject) => {
+    try {
+      console.log("Sending message to background script");
+
+      chrome.runtime.sendMessage({
+        action: "callClaudeAPI",
+        prompt: prompt,
+        history: conversationHistory
+      }, response => {
+        // Check for runtime errors
+        if (chrome.runtime.lastError) {
+          console.error("Runtime error:", chrome.runtime.lastError);
+          isBackgroundConnected = false;
+          pingBackground(); // Try to reconnect
+          reject(new Error("Connection to background service lost. Please try again."));
+          return;
+        }
+
+        console.log("Received response from background script:", response);
+
+        // In a real implementation, we'd handle the response from the background script
+        if (response && response.success) {
+          resolve(response.data);
+        } else {
+          console.error("API call failed:", response?.error || "Unknown error");
+          reject(new Error(response?.error || "Unknown error occurred"));
+        }
+      });
+    } catch (error) {
+      console.error("Error calling Claude API:", error);
+      reject(error);
     }
-  } catch (error) {
-    console.error("Error calling Claude API:", error);
-    return "I'm sorry, there was an error connecting to my backend services. Please try again later.";
-  }
+  });
 }
 
 function addMessageToChat(role, text) {
@@ -277,5 +431,8 @@ function addMessageToChat(role, text) {
   return messageElement;
 }
 
-// Initialize the chat components once the sidebar is added to the page
-setTimeout(initializeChat, 500); // Small delay to ensure everything is loaded 
+// Initialize the chat on window load
+window.addEventListener('load', initializeChat);
+
+// Periodically ping the background script to ensure connection
+setInterval(pingBackground, 30000); // Every 30 seconds 

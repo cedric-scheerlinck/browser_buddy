@@ -1,21 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "AI Content Detector",
+  "name": "Browser Buddy",
   "version": "1.0",
-  "description": "Detects and highlights AI-generated content on webpages",
+  "description": "AI assistant for browsing the web",
   "permissions": [
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "host_permissions": [
-    "https://api.anthropic.com/*"
+    "https://api.anthropic.com/*",
+    "<all_urls>"
   ],
   "action": {
     "default_popup": "popup.html"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -27,6 +30,19 @@
         "chat_script.js"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "*.html",
+        "*.js",
+        "*.css",
+        "images/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "icons": {
