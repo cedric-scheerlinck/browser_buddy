@@ -2,6 +2,35 @@
 
 console.log('Browser Buddy background script loaded');
 
+// Load environment variables
+let apiKey = '';
+
+// Function to load API key from .env file
+async function loadApiKey() {
+    try {
+        const response = await fetch('/.env');
+        const text = await response.text();
+        const lines = text.split('\n');
+
+        for (const line of lines) {
+            if (line.startsWith('CLAUDE_API_KEY=')) {
+                apiKey = line.substring('CLAUDE_API_KEY='.length).trim();
+                console.log('API key loaded successfully');
+                break;
+            }
+        }
+
+        if (!apiKey) {
+            console.error('Failed to load API key from .env file');
+        }
+    } catch (error) {
+        console.error('Error loading API key:', error);
+    }
+}
+
+// Load API key when background script starts
+loadApiKey();
+
 // Handle messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Background script received message:', message.action);
@@ -26,9 +55,13 @@ async function callClaudeAPI(prompt, history) {
     // Claude API endpoint
     const apiUrl = 'https://api.anthropic.com/v1/messages';
 
-    // API key from environment (in production, you would securely store this)
-    // Note: This is an example. In practice, you would need more secure API key management
-    const apiKey = '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';
+    // Ensure API key is loaded
+    if (!apiKey) {
+        await loadApiKey();
+        if (!apiKey) {
+            throw new Error('API key not available. Please check your .env file.');
+        }
+    }
 
     // Prepare messages array for Claude API
     // Format conversation history correctly for Claude's API
@@ -59,7 +92,7 @@ async function callClaudeAPI(prompt, history) {
                 'anthropic-version': '2023-06-01'
             },
             body: JSON.stringify({
-                model: 'claude-3-haiku-20240307',
+                model: 'claude-3-7-sonnet-latest',
                 max_tokens: 1000,
                 messages: messages
             })
