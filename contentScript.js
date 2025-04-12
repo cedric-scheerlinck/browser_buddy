@@ -1,6 +1,12 @@
 // This script runs in the context of the web page
 console.log("AI Content Detector: Content script loaded on " + window.location.href);
 
+// Global variable to store the API key once loaded
+// let claudeApiKey = null;
+
+// Function to load the Claude API key from key.txt
+// We no longer need this here - it's handled in the background script
+
 // Tell the extension that the content script is ready
 try {
   chrome.runtime.sendMessage({ action: "contentScriptReady", url: window.location.href });
@@ -156,6 +162,61 @@ function resetHighlighting() {
   console.log("Reset all block highlighting");
 }
 
+// Function to analyze text with Claude API via background script
+async function analyzeTextWithClaude(textBlocks, isDryRun = false) {
+  try {
+    // Only analyze the first block for simplicity
+    const blockToAnalyze = textBlocks[0];
+    
+    if (!blockToAnalyze || !blockToAnalyze.text) {
+      throw new Error("No text to analyze");
+    }
+    
+    // Extract the block ID to associate with the response
+    const blockId = blockToAnalyze.blockId;
+    const blockText = blockToAnalyze.text;
+    
+    console.log(`Requesting analysis for block ${blockId}${isDryRun ? " (dry run)" : ""}...`);
+    
+    // Prepare the message to send to background script
+    const message = {
+      action: "analyzeWithClaude",
+      blockText: blockText,
+      blockId: blockId,
+      dryRun: isDryRun
+    };
+    
+    // Log what we're sending to the background script
+    console.log("Sending request to background script:", {
+      ...message,
+      blockTextPreview: blockText.length > 100 ? 
+        blockText.substring(0, 100) + '...' : blockText
+    });
+    
+    // Send message to background script to perform the analysis
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, function(response) {
+        if (chrome.runtime.lastError) {
+          console.error("Error communicating with background script:", chrome.runtime.lastError);
+          reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
+          return;
+        }
+        
+        if (response && response.success) {
+          console.log("Received successful response from background script");
+          resolve(response.analysis);
+        } else {
+          console.error("Received error response from background script:", response?.error || "Unknown error");
+          reject(new Error(response ? response.error : "Unknown error from background script"));
+        }
+      });
+    });
+  } catch (error) {
+    console.error("Error in analyzeTextWithClaude:", error);
+    throw error;
+  }
+}
+
 // Set up message listener to communicate with popup.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Content script received message:", message);
@@ -215,6 +276,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: error.message });
     }
     return true;
+  }
+  
+  // Handle analyzing text with Claude
+  if (message.action === "analyzeWithClaude") {
+    try {
+      // Get the text blocks
+      const textBlocks = getTextContent();
+      
+      if (!textBlocks || textBlocks.length === 0) {
+        sendResponse({ 
+          success: false, 
+          error: "No text blocks found to analyze" 
+        });
+        return true;
+      }
+      
+      // Check if this is a dry run
+      const isDryRun = message.dryRun === true;
+      
+      console.log(`${isDryRun ? "Dry run" : "Analysis"} requested for the first text block`);
+      
+      // Call the Claude API (or dry run) for the first block only via background script
+      analyzeTextWithClaude(textBlocks, isDryRun)
+        .then(result => {
+          sendResponse({
+            success: true,
+            analysis: result,
+            blockId: result.blockId,
+            blockCount: textBlocks.length,
+            dryRun: isDryRun
+          });
+        })
+        .catch(error => {
+          sendResponse({
+            success: false,
+            error: error.message
+          });
+        });
+      
+      return true; // Required for asynchronous sendResponse
+    } catch (error) {
+      console.error("Error processing analyze request:", error);
+      sendResponse({ success: false, error: error.message });
+      return true;
+    }
   }
 });
 

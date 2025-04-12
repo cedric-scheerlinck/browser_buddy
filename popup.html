@@ -14,6 +14,11 @@
     
     <div id="actions" style="margin-top: 15px; display: none;">
       <button id="highlightOdd" class="action-button">Highlight Odd Blocks</button>
+      <div class="option-row">
+        <input type="checkbox" id="dryRunOption" name="dryRunOption">
+        <label for="dryRunOption">Dry run (no API request)</label>
+      </div>
+      <button id="analyzeWithClaude" class="action-button claude-button">Analyze First Block</button>
     </div>
     
     <div id="results-container">
@@ -22,6 +27,11 @@
         <p class="placeholder">Scan a page to see text blocks...</p>
       </div>
       <button id="toggleResults" style="display: none;">Show/Hide Text</button>
+    </div>
+    
+    <div id="analysis-container" style="display: none;">
+      <h2>AI Analysis</h2>
+      <div id="analysis-results"></div>
     </div>
   </div>
   <script src="popup.js"></script>

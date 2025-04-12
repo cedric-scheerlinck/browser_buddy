@@ -6,7 +6,13 @@ document.addEventListener('DOMContentLoaded', function() {
   const textResultsDiv = document.getElementById('text-results');
   const toggleResultsButton = document.getElementById('toggleResults');
   const highlightOddButton = document.getElementById('highlightOdd');
+  const analyzeWithClaudeButton = document.getElementById('analyzeWithClaude');
   const actionsDiv = document.getElementById('actions');
+  const analysisContainer = document.getElementById('analysis-container');
+  const analysisResultsDiv = document.getElementById('analysis-results');
+  
+  // Variable to store the text blocks from the most recent scan
+  let latestTextBlocks = [];
   
   // Add a click event listener to the scan button
   scanButton.addEventListener('click', async function() {
@@ -170,6 +176,119 @@ document.addEventListener('DOMContentLoaded', function() {
       toggleResultsButton.textContent = 'Show Text';
     }
   });
+  
+  // Add analyze with Claude functionality
+  analyzeWithClaudeButton.addEventListener('click', async function() {
+    try {
+      // Get the active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      if (!tab) {
+        statusDiv.textContent = "Error: Could not access the current tab.";
+        statusDiv.style.backgroundColor = "#f8d7da";
+        return;
+      }
+      
+      // Check if dry run is enabled
+      const isDryRun = document.getElementById('dryRunOption').checked;
+      
+      // Update status
+      statusDiv.textContent = isDryRun 
+        ? "Analyzing first text block with Claude (Dry Run)..." 
+        : "Analyzing first text block with Claude...";
+      statusDiv.style.backgroundColor = "#fff3cd";
+      
+      // Disable button during analysis
+      analyzeWithClaudeButton.disabled = true;
+      
+      // Send message to content script to analyze text
+      chrome.tabs.sendMessage(
+        tab.id,
+        { action: "analyzeWithClaude", dryRun: isDryRun },
+        function(response) {
+          // Re-enable button
+          analyzeWithClaudeButton.disabled = false;
+          
+          if (chrome.runtime.lastError) {
+            console.error("Error sending analyze message:", chrome.runtime.lastError);
+            statusDiv.textContent = "Error: Failed to communicate with Claude. " + chrome.runtime.lastError.message;
+            statusDiv.style.backgroundColor = "#f8d7da";
+            return;
+          }
+          
+          if (response && response.success) {
+            // Show the analysis
+            statusDiv.textContent = isDryRun
+              ? `Dry run complete for block #${response.blockId}! Check console for details.`
+              : `Analysis complete for block #${response.blockId}!`;
+            statusDiv.style.backgroundColor = "#d4edda";
+            
+            // Display the analysis results (for both dry run and real results)
+            displayAnalysisResults(response.analysis);
+            
+            // Also log the response to console
+            console.log(isDryRun ? "Dry run response:" : "Claude API response:", response.analysis);
+          } else {
+            // Show error
+            statusDiv.textContent = "Error: " + (response ? response.error : "Unknown error");
+            statusDiv.style.backgroundColor = "#f8d7da";
+          }
+        }
+      );
+    } catch (error) {
+      console.error("Error in analyze button handler:", error);
+      statusDiv.textContent = "Error: " + error.message;
+      statusDiv.style.backgroundColor = "#f8d7da";
+      analyzeWithClaudeButton.disabled = false;
+    }
+  });
+  
+  // Function to display Claude's analysis results
+  function displayAnalysisResults(analysis) {
+    try {
+      // Show the analysis container
+      analysisContainer.style.display = 'block';
+      
+      // Clear previous results
+      analysisResultsDiv.innerHTML = '';
+      
+      // Get the content from Claude's response
+      const analysisText = analysis.content[0].text;
+      
+      // Get the block ID if available
+      const blockId = analysis.blockId !== undefined ? analysis.blockId : 'unknown';
+      
+      // Create a heading showing which block was analyzed
+      const blockHeading = document.createElement('h3');
+      blockHeading.className = 'block-id-heading';
+      blockHeading.textContent = `Analysis of Block #${blockId}`;
+      analysisResultsDiv.appendChild(blockHeading);
+      
+      // Create a div for the analysis
+      const analysisDiv = document.createElement('div');
+      analysisDiv.className = 'claude-analysis';
+      analysisDiv.innerHTML = `<p>${analysisText.replace(/\n/g, '<br>')}</p>`;
+      
+      // Add to the results div
+      analysisResultsDiv.appendChild(analysisDiv);
+      
+      // Scroll to the analysis container
+      analysisContainer.scrollIntoView({ behavior: 'smooth' });
+    } catch (error) {
+      console.error("Error displaying analysis results:", error);
+      analysisResultsDiv.innerHTML = `<p class="error">Error displaying analysis: ${error.message}</p>`;
+    }
+  }
+  
+  // When displaying text blocks, store them for later use
+  const originalDisplayTextBlocks = displayTextBlocks;
+  displayTextBlocks = function(textBlocks, container, toggleButton) {
+    // Store the text blocks for potential Claude analysis
+    latestTextBlocks = textBlocks;
+    
+    // Call the original function
+    originalDisplayTextBlocks(textBlocks, container, toggleButton);
+  };
 });
 
 // Function to display text blocks in the UI
@@ -310,6 +429,7 @@ async function injectContentScriptAsFallback(tabId, statusDiv) {
 // Fallback function that runs directly in the webpage context if needed
 function scanPageForAIContent() {
   try {
+    // This is a simplified version of extractTextFromDOM in contentScript.js
     const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, span, div, article, section');
     const textContent = [];
     let blockCounter = 0;
@@ -318,7 +438,6 @@ function scanPageForAIContent() {
     function extractTextFromElement(element) {
       // First check if this element has enough direct text to be considered a block
       let elementText = "";
-      let hasSubstantialText = false;
       
       // Get all text directly in this element (not in children)
       for (const node of element.childNodes) {
@@ -326,7 +445,6 @@ function scanPageForAIContent() {
           const trimmedText = node.textContent.trim();
           if (trimmedText) {
             elementText += trimmedText + " ";
-            console.log(`Direct text: ${trimmedText}`);
           }
         }
       }
@@ -335,54 +453,34 @@ function scanPageForAIContent() {
       
       // If the element has substantial direct text, add it as a block
       if (elementText.length >= 100) {
-        hasSubstantialText = true;
-        
         // Add a unique class to the element for later reference
         const uniqueClass = `ai-content-block-${blockCounter}`;
         
-        // Preserve existing classes if they exist
-        if (element.className) {
-          // Check if the element already has the class (avoid duplicates)
-          if (!element.className.includes(uniqueClass)) {
-            element.className = element.className + ' ' + uniqueClass;
-          }
-        } else {
-          element.className = uniqueClass;
+        // Add class to element
+        if (!element.className.includes(uniqueClass)) {
+          element.className = element.className ? element.className + ' ' + uniqueClass : uniqueClass;
         }
         
         textContent.push({
           text: elementText,
-          blockId: blockCounter,
+          blockId: blockCounter
         });
         
         blockCounter++;
       }
       
-      // If this element doesn't have enough text of its own,
-      // or if we want to also process children even if the parent has text,
-      // recursively process child elements that aren't already processed
-      if (!hasSubstantialText || true) {
-        // Get child elements (not text nodes)
-        const childElements = Array.from(element.children);
-        
-        for (const childElement of childElements) {
-          // Skip script, style, and other non-content elements
-          const tagName = childElement.tagName.toLowerCase();
-          if (tagName === 'script' || tagName === 'style' || tagName === 'noscript' || 
-              tagName === 'svg' || tagName === 'path' || tagName === 'iframe') {
-            continue;
-          }
-          
-          // Recursively extract text from the child element
+      // Process child elements
+      Array.from(element.children).forEach(childElement => {
+        // Skip non-content elements
+        const tagName = childElement.tagName.toLowerCase();
+        if (!['script', 'style', 'noscript', 'svg', 'path', 'iframe'].includes(tagName)) {
           extractTextFromElement(childElement);
         }
-      }
+      });
     }
     
-    // Process each top-level element
+    // Process each top-level element, skipping those that are children of processed elements
     textElements.forEach(element => {
-      // Skip elements that are children of elements we've already processed
-      // (to avoid processing the same content multiple times)
       let isChildOfProcessed = false;
       let parent = element.parentElement;
       
@@ -400,9 +498,6 @@ function scanPageForAIContent() {
     });
     
     console.log(`Extracted ${textContent.length} text blocks in fallback mode`);
-    for (let i = 0; i < Math.min(textContent.length, 5); i++) {
-      console.log(`Block ${i}: ${JSON.stringify(textContent[i]).substring(0, 150)}...`);
-    }
     return textContent;
   } catch (error) {
     console.error("Error in scanPageForAIContent:", error);

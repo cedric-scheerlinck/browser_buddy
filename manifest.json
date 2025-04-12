@@ -8,14 +8,26 @@
     "scripting",
     "tabs"
   ],
+  "host_permissions": [
+    "https://api.anthropic.com/*"
+  ],
   "action": {
     "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["contentScript.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["key.txt"],
+      "matches": ["<all_urls>"]
     }
   ],
   "icons": {
