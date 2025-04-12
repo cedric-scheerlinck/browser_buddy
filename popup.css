@@ -149,4 +149,126 @@ button:hover {
 .option-row label {
   font-size: 14px;
   color: #555;
+}
+
+#request-colors-table {
+  margin: 20px 0;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#request-colors-table table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+#request-colors-table th,
+#request-colors-table td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+#request-colors-table th {
+  font-weight: 600;
+  color: #333;
+  background-color: #f1f1f1;
+}
+
+#request-colors-table tr:last-child td {
+  border-bottom: none;
+}
+
+.color-indicator {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: inline-block;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.add-request-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.form-input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #4285f4;
+  box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+}
+
+input[type="color"] {
+  height: 40px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.delete-request {
+  background-color: #dc3545;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.delete-request:hover {
+  background-color: #c82333;
+}
+
+.delete-request:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+}
+
+#requestTypesTable td:last-child {
+  text-align: center;
+}
+
+#requestTypesTable tr {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+#requestTypesTable tr:hover {
+  background-color: #f5f5f5;
+}
+
+#requestTypesTable tr.clickable {
+  cursor: pointer;
+}
+
+#requestTypesTable tr.clickable:hover {
+  background-color: #e8f0fe;
+}
+
+#requestTypesTable tr.clickable td:first-child {
+  font-weight: 500;
+}
+
+#requestTypesTable tr.clickable td:first-child::after {
+  content: " →";
+  color: #4285f4;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+#requestTypesTable tr.clickable:hover td:first-child::after {
+  opacity: 1;
 } 

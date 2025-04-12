@@ -14,11 +14,28 @@
     
     <div id="actions" style="margin-top: 15px; display: none;">
       <button id="highlightOdd" class="action-button">Highlight Odd Blocks</button>
-      <div class="option-row">
-        <input type="checkbox" id="dryRunOption" name="dryRunOption">
-        <label for="dryRunOption">Dry run (no API request)</label>
-      </div>
       <button id="analyzeWithClaude" class="action-button claude-button">Analyze First Block</button>
+    </div>
+    
+    <div id="request-colors-table">
+      <h2>Request Types</h2>
+      <div class="add-request-form">
+        <input type="text" id="requestName" placeholder="Request name" class="form-input">
+        <input type="text" id="requestPrompt" placeholder="Prompt for language model" class="form-input">
+        <input type="color" id="requestColor" value="#4285f4" class="form-input">
+        <button id="addRequest" class="action-button">Add Request</button>
+      </div>
+      <table id="requestTypesTable">
+        <thead>
+          <tr>
+            <th>Request Type</th>
+            <th>Color Indicator</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="requestTypesBody">
+        </tbody>
+      </table>
     </div>
     
     <div id="results-container">

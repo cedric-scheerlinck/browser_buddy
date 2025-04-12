@@ -1,12 +1,4 @@
 // This script runs in the context of the web page
-console.log("AI Content Detector: Content script loaded on " + window.location.href);
-
-// Global variable to store the API key once loaded
-// let claudeApiKey = null;
-
-// Function to load the Claude API key from key.txt
-// We no longer need this here - it's handled in the background script
-
 // Tell the extension that the content script is ready
 try {
   chrome.runtime.sendMessage({ action: "contentScriptReady", url: window.location.href });
@@ -58,6 +50,10 @@ function extractTextFromDOM() {
         element.className = uniqueClass;
       }
       
+      // Ensure the element is visible and can be styled
+      element.style.display = 'block';
+      element.style.position = 'relative';
+      
       textContent.push({
         text: elementText,
         element: element,  // Store reference to the element for future highlighting
@@ -108,7 +104,6 @@ function extractTextFromDOM() {
     }
   });
   
-  console.log(`AI Content Detector: Found ${textContent.length} text blocks on the page`);
   return textContent;
 }
 
@@ -123,11 +118,14 @@ function getTextContent() {
   return cachedTextContent;
 }
 
-// Function to highlight odd-numbered blocks with a red background
-function highlightOddBlocks() {
-  const blocks = getTextContent();
-  let styleAdded = false;
-  
+// Function to highlight blocks based on Claude's response
+function highlightBlocks(blocks, shouldHighlight, color) {
+  console.log('Highlighting blocks:', {
+    totalBlocks: blocks.length,
+    blocksToHighlight: shouldHighlight.filter(Boolean).length,
+    color: color
+  });
+
   // First, check if our style element already exists
   let styleEl = document.getElementById('ai-detector-styles');
   
@@ -138,79 +136,153 @@ function highlightOddBlocks() {
     document.head.appendChild(styleEl);
   }
   
-  // Set the CSS content to highlight odd blocks
-  styleEl.textContent = `
-    ${Array.from({ length: Math.ceil(blocks.length / 2) }, (_, i) => 
-      `.ai-content-block-${i * 2 + 1}`).join(', ')} {
-      background-color: rgba(255, 0, 0, 0.2) !important;
-      border: 1px solid red !important;
-      padding: 5px !important;
-      transition: background-color 0.3s ease !important;
-    }
-  `;
+  // Create CSS rules for highlighted blocks
+  const highlightedBlocks = blocks
+    .filter((_, index) => shouldHighlight[index])
+    .map(block => `.ai-content-block-${block.blockId}`)
+    .join(', ');
   
-  console.log("Applied red background to odd-numbered blocks");
-  return blocks.length;
-}
-
-// Function to reset all highlighting
-function resetHighlighting() {
-  const styleEl = document.getElementById('ai-detector-styles');
-  if (styleEl) {
+  if (highlightedBlocks) {
+    // Create more specific CSS rules to ensure they override any existing styles
+    styleEl.textContent = `
+      ${highlightedBlocks} {
+        border: 3px solid ${color} !important;
+        padding: 5px !important;
+        transition: border-color 0.3s ease !important;
+        position: relative !important;
+        z-index: 1 !important;
+        display: block !important;
+        margin: 5px 0 !important;
+        border-radius: 4px !important;
+        box-sizing: border-box !important;
+      }
+    `;
+    
+    // Also add inline styles to the elements as a backup
+    blocks.forEach((block, index) => {
+      if (shouldHighlight[index]) {
+        const element = block.element;
+        if (element) {
+          console.log(`Applying frame to block ${block.blockId}:`, element);
+          
+          // Ensure the element is properly styled
+          element.style.display = 'block';
+          element.style.position = 'relative';
+          element.style.border = `3px solid ${color}`;
+          element.style.padding = '5px';
+          element.style.zIndex = '1';
+          element.style.margin = '5px 0';
+          element.style.borderRadius = '4px';
+          element.style.boxSizing = 'border-box';
+          
+          // Force a reflow to ensure styles are applied
+          element.offsetHeight;
+        }
+      }
+    });
+  } else {
     styleEl.textContent = '';
   }
-  console.log("Reset all block highlighting");
 }
 
 // Function to analyze text with Claude API via background script
-async function analyzeTextWithClaude(textBlocks, isDryRun = false) {
+async function analyzeTextWithClaude(textBlocks, customPrompt = null, color) {
   try {
-    // Only analyze the first block for simplicity
-    const blockToAnalyze = textBlocks[0];
-    
-    if (!blockToAnalyze || !blockToAnalyze.text) {
-      throw new Error("No text to analyze");
+    // Analyze each block
+    const results = [];
+    for (let i = 0; i < textBlocks.length; i++) {
+      const block = textBlocks[i];
+      const blockId = block.blockId;
+      const blockText = block.text;
+      
+      // Update status in popup
+      chrome.runtime.sendMessage({
+        action: "updateStatus",
+        message: `Analyzing block ${i + 1}/${textBlocks.length}`
+      });
+      
+      // Prepare the message to send to background script
+      const message = {
+        action: "analyzeWithClaude",
+        blockText: blockText,
+        blockId: blockId,
+        prompt: customPrompt
+      };
+      
+      // Send message to background script to perform the analysis
+      const result = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, function(response) {
+          if (chrome.runtime.lastError) {
+            reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
+            return;
+          }
+          
+          if (response && response.success) {
+            resolve(response.analysis);
+          } else {
+            reject(new Error(response ? response.error : "Unknown error from background script"));
+          }
+        });
+      });
+      
+      // Parse the response to get a boolean value
+      const responseText = result.content[0].text.toLowerCase();
+      let shouldHighlight = false;
+      
+      // Check for various positive indicators in the response
+      if (responseText.includes('true') || 
+          responseText.includes('yes') || 
+          responseText.includes('likely') ||
+          responseText.includes('probably') ||
+          responseText.includes('appears to be') ||
+          responseText.includes('seems to be') ||
+          responseText.includes('indicates')) {
+        shouldHighlight = true;
+      }
+      
+      // Check for confidence scores or percentages
+      const confidenceMatch = responseText.match(/(\d+)%/);
+      if (confidenceMatch) {
+        const confidence = parseInt(confidenceMatch[1]);
+        if (confidence >= 70) { // Only highlight if confidence is high
+          shouldHighlight = true;
+        } else {
+          shouldHighlight = false;
+        }
+      }
+      
+      // Log the analysis details after determining shouldHighlight
+      console.log(`\n=== Analysis for Block ${blockId} ===`);
+      console.log('Text:', blockText.substring(0, 200) + '...'); // First 200 chars for readability
+      console.log('Claude Response:', result.content[0].text);
+      console.log('Highlight Decision:', shouldHighlight);
+      console.log('===========================\n');
+      
+      // Highlight this block immediately if needed
+      if (shouldHighlight) {
+        const element = block.element;
+        if (element) {
+          console.log(`Applying frame to block ${block.blockId}:`, element);
+          
+          // Ensure the element is properly styled
+          element.style.display = 'block';
+          element.style.position = 'relative';
+          element.style.border = `3px solid ${color}`;
+          element.style.padding = '5px';
+          element.style.zIndex = '1';
+          element.style.margin = '5px 0';
+          element.style.borderRadius = '4px';
+          element.style.boxSizing = 'border-box';
+          
+          // Force a reflow to ensure styles are applied
+          element.offsetHeight;
+        }
+      }
+      
+      results.push(shouldHighlight);
     }
     
-    // Extract the block ID to associate with the response
-    const blockId = blockToAnalyze.blockId;
-    const blockText = blockToAnalyze.text;
-    
-    console.log(`Requesting analysis for block ${blockId}${isDryRun ? " (dry run)" : ""}...`);
-    
-    // Prepare the message to send to background script
-    const message = {
-      action: "analyzeWithClaude",
-      blockText: blockText,
-      blockId: blockId,
-      dryRun: isDryRun
-    };
-    
-    // Log what we're sending to the background script
-    console.log("Sending request to background script:", {
-      ...message,
-      blockTextPreview: blockText.length > 100 ? 
-        blockText.substring(0, 100) + '...' : blockText
-    });
-    
-    // Send message to background script to perform the analysis
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, function(response) {
-        if (chrome.runtime.lastError) {
-          console.error("Error communicating with background script:", chrome.runtime.lastError);
-          reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
-          return;
-        }
-        
-        if (response && response.success) {
-          console.log("Received successful response from background script");
-          resolve(response.analysis);
-        } else {
-          console.error("Received error response from background script:", response?.error || "Unknown error");
-          reject(new Error(response ? response.error : "Unknown error from background script"));
-        }
-      });
-    });
+    return results;
   } catch (error) {
     console.error("Error in analyzeTextWithClaude:", error);
     throw error;
@@ -219,8 +291,6 @@ async function analyzeTextWithClaude(textBlocks, isDryRun = false) {
 
 // Set up message listener to communicate with popup.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("Content script received message:", message);
-  
   if (message.action === "extractText") {
     try {
       // Extract text from the page
@@ -231,9 +301,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         success: true,
         textBlocks: textBlocks.map(item => ({
           text: item.text,
-          blockId: item.blockId,
-          // We can't send DOM elements through messages, so we're excluding the element property
-          // We'll handle highlighting separately later
+          blockId: item.blockId
         }))
       });
     } catch (error) {
@@ -241,40 +309,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: false, error: error.message });
     }
     
-    return true; // Required for asynchronous sendResponse
+    return true;
   }
   
   // Respond to ping messages to check if content script is loaded
   if (message.action === "ping") {
     sendResponse({ success: true, message: "Content script is active" });
-    return true;
-  }
-  
-  // Handle highlighting odd blocks
-  if (message.action === "highlightOdd") {
-    try {
-      const blocksCount = highlightOddBlocks();
-      sendResponse({ 
-        success: true, 
-        message: `Highlighted odd-numbered blocks with red background`,
-        count: blocksCount 
-      });
-    } catch (error) {
-      console.error("Error highlighting odd blocks:", error);
-      sendResponse({ success: false, error: error.message });
-    }
-    return true;
-  }
-  
-  // Handle resetting highlighting
-  if (message.action === "resetHighlighting") {
-    try {
-      resetHighlighting();
-      sendResponse({ success: true, message: "Reset all highlighting" });
-    } catch (error) {
-      console.error("Error resetting highlighting:", error);
-      sendResponse({ success: false, error: error.message });
-    }
     return true;
   }
   
@@ -292,20 +332,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
       
-      // Check if this is a dry run
-      const isDryRun = message.dryRun === true;
-      
-      console.log(`${isDryRun ? "Dry run" : "Analysis"} requested for the first text block`);
-      
-      // Call the Claude API (or dry run) for the first block only via background script
-      analyzeTextWithClaude(textBlocks, isDryRun)
-        .then(result => {
+      // Call the Claude API for all blocks via background script
+      analyzeTextWithClaude(textBlocks, message.prompt, message.color)
+        .then(results => {
           sendResponse({
             success: true,
-            analysis: result,
-            blockId: result.blockId,
-            blockCount: textBlocks.length,
-            dryRun: isDryRun
+            analyzedBlocks: textBlocks.length,
+            highlightedBlocks: results.filter(Boolean).length
           });
         })
         .catch(error => {
@@ -315,7 +348,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         });
       
-      return true; // Required for asynchronous sendResponse
+      return true;
     } catch (error) {
       console.error("Error processing analyze request:", error);
       sendResponse({ success: false, error: error.message });
@@ -328,13 +361,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 document.addEventListener('DOMContentLoaded', () => {
   // Pre-cache the text content
   getTextContent();
-  
-  // For now, just log the first few text blocks to the console
-  console.log("Text content samples:");
-  const pageText = getTextContent();
-  pageText.slice(0, 3).forEach((item, index) => {
-    console.log(`Block ${index + 1}: ${item.text.substring(0, 100)}...`);
-  });
 });
 
 // Also run for dynamically loaded pages or single page applications

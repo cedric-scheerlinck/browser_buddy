@@ -11,6 +11,192 @@ document.addEventListener('DOMContentLoaded', function() {
   const analysisContainer = document.getElementById('analysis-container');
   const analysisResultsDiv = document.getElementById('analysis-results');
   
+  // Get references to request type management elements
+  const addRequestButton = document.getElementById('addRequest');
+  const requestNameInput = document.getElementById('requestName');
+  const requestPromptInput = document.getElementById('requestPrompt');
+  const requestColorInput = document.getElementById('requestColor');
+  const requestTypesBody = document.getElementById('requestTypesBody');
+  
+  // Load saved request types from storage
+  chrome.storage.local.get(['customRequestTypes'], function(result) {
+    if (result.customRequestTypes) {
+      result.customRequestTypes.forEach(request => {
+        addRequestTypeToTable(request.name, request.prompt, request.color);
+      });
+    }
+  });
+  
+  // Add new request type
+  addRequestButton.addEventListener('click', function() {
+    const name = requestNameInput.value.trim();
+    const prompt = requestPromptInput.value.trim();
+    const color = requestColorInput.value;
+    
+    if (!name || !prompt) {
+      statusDiv.textContent = "Please fill in both name and prompt fields.";
+      statusDiv.style.backgroundColor = "#fff3cd";
+      return;
+    }
+    
+    // Add to table
+    addRequestTypeToTable(name, prompt, color);
+    
+    // Save to storage
+    saveRequestTypes();
+    
+    // Clear form
+    requestNameInput.value = '';
+    requestPromptInput.value = '';
+    requestColorInput.value = '#4285f4';
+    
+    // Update status
+    statusDiv.textContent = "Request type added successfully!";
+    statusDiv.style.backgroundColor = "#d4edda";
+  });
+  
+  // Function to add a request type to the table
+  function addRequestTypeToTable(name, prompt, color) {
+    const row = document.createElement('tr');
+    row.className = 'clickable';
+    row.innerHTML = `
+      <td>${name}</td>
+      <td><div class="color-indicator" style="background-color: ${color};"></div></td>
+      <td><button class="delete-request">Delete</button></td>
+    `;
+    
+    // Add click handler for the row
+    row.addEventListener('click', async function(e) {
+      // Don't trigger if clicking the delete button
+      if (e.target.closest('.delete-request')) return;
+      
+      try {
+        // Get the active tab
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        
+        if (!tab) {
+          statusDiv.textContent = "Error: Could not access the current tab.";
+          statusDiv.style.backgroundColor = "#f8d7da";
+          return;
+        }
+
+        // First check if content script is available
+        const isAvailable = await checkContentScriptAvailable(tab.id);
+        if (!isAvailable) {
+          statusDiv.textContent = "Error: Content script not available. Please refresh the page and try again.";
+          statusDiv.style.backgroundColor = "#f8d7da";
+          return;
+        }
+        
+        // Create and show stop button
+        const stopButton = document.createElement('button');
+        stopButton.id = 'stopAnalysis';
+        stopButton.textContent = 'Stop Analysis';
+        stopButton.style.marginTop = '10px';
+        stopButton.style.backgroundColor = '#dc3545';
+        stopButton.style.color = 'white';
+        stopButton.style.border = 'none';
+        stopButton.style.padding = '5px 10px';
+        stopButton.style.borderRadius = '4px';
+        stopButton.style.cursor = 'pointer';
+        
+        // Add stop button to status div
+        statusDiv.appendChild(stopButton);
+        
+        // Update status
+        statusDiv.textContent = `Analyzing blocks with "${name}"...`;
+        statusDiv.style.backgroundColor = "#fff3cd";
+        
+        // Send message to content script to analyze text with custom prompt
+        chrome.tabs.sendMessage(
+          tab.id,
+          { 
+            action: "analyzeWithClaude",
+            prompt: prompt,
+            color: color,
+            requestName: name
+          },
+          function(response) {
+            // Remove stop button
+            stopButton.remove();
+            
+            if (chrome.runtime.lastError) {
+              console.error("Error sending analyze message:", chrome.runtime.lastError);
+              statusDiv.textContent = "Error: Failed to communicate with Claude. " + chrome.runtime.lastError.message;
+              statusDiv.style.backgroundColor = "#f8d7da";
+              return;
+            }
+            
+            if (response && response.success) {
+              // Show the analysis
+              statusDiv.textContent = `Analysis complete! Highlighted ${response.highlightedBlocks} of ${response.analyzedBlocks} blocks.`;
+              statusDiv.style.backgroundColor = "#d4edda";
+            } else {
+              // Show error
+              statusDiv.textContent = "Error: " + (response ? response.error : "Unknown error");
+              statusDiv.style.backgroundColor = "#f8d7da";
+            }
+          }
+        );
+        
+        // Add click handler for stop button
+        stopButton.addEventListener('click', function() {
+          // Send stop message to content script
+          chrome.tabs.sendMessage(
+            tab.id,
+            { action: "stopAnalysis" },
+            function(response) {
+              // Remove stop button
+              stopButton.remove();
+              
+              // Update status
+              statusDiv.textContent = "Analysis stopped by user.";
+              statusDiv.style.backgroundColor = "#f8f9fa";
+            }
+          );
+        });
+        
+      } catch (error) {
+        console.error("Error in row click handler:", error);
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.style.backgroundColor = "#f8d7da";
+      }
+    });
+    
+    // Add delete functionality
+    const deleteButton = row.querySelector('.delete-request');
+    deleteButton.addEventListener('click', function() {
+      row.remove();
+      saveRequestTypes();
+      statusDiv.textContent = "Request type deleted successfully!";
+      statusDiv.style.backgroundColor = "#d4edda";
+    });
+    
+    // Store prompt as data attribute
+    row.dataset.prompt = prompt;
+    
+    requestTypesBody.appendChild(row);
+  }
+  
+  // Function to save all request types to storage
+  function saveRequestTypes() {
+    const requestTypes = [];
+    const rows = requestTypesBody.querySelectorAll('tr');
+    
+    rows.forEach(row => {
+      // Skip default rows (they have disabled delete buttons)
+      if (row.querySelector('.delete-request:disabled')) return;
+      
+      requestTypes.push({
+        name: row.cells[0].textContent,
+        prompt: row.dataset.prompt,
+        color: row.querySelector('.color-indicator').style.backgroundColor
+      });
+    });
+    
+    chrome.storage.local.set({ customRequestTypes: requestTypes });
+  }
+  
   // Variable to store the text blocks from the most recent scan
   let latestTextBlocks = [];
   
@@ -189,13 +375,8 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
       
-      // Check if dry run is enabled
-      const isDryRun = document.getElementById('dryRunOption').checked;
-      
       // Update status
-      statusDiv.textContent = isDryRun 
-        ? "Analyzing first text block with Claude (Dry Run)..." 
-        : "Analyzing first text block with Claude...";
+      statusDiv.textContent = "Analyzing first text block with Claude...";
       statusDiv.style.backgroundColor = "#fff3cd";
       
       // Disable button during analysis
@@ -204,7 +385,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // Send message to content script to analyze text
       chrome.tabs.sendMessage(
         tab.id,
-        { action: "analyzeWithClaude", dryRun: isDryRun },
+        { action: "analyzeWithClaude" },
         function(response) {
           // Re-enable button
           analyzeWithClaudeButton.disabled = false;
@@ -218,16 +399,14 @@ document.addEventListener('DOMContentLoaded', function() {
           
           if (response && response.success) {
             // Show the analysis
-            statusDiv.textContent = isDryRun
-              ? `Dry run complete for block #${response.blockId}! Check console for details.`
-              : `Analysis complete for block #${response.blockId}!`;
+            statusDiv.textContent = `Analysis complete for block #${response.blockId}!`;
             statusDiv.style.backgroundColor = "#d4edda";
             
-            // Display the analysis results (for both dry run and real results)
+            // Display the analysis results
             displayAnalysisResults(response.analysis);
             
             // Also log the response to console
-            console.log(isDryRun ? "Dry run response:" : "Claude API response:", response.analysis);
+            console.log("Claude API response:", response.analysis);
           } else {
             // Show error
             statusDiv.textContent = "Error: " + (response ? response.error : "Unknown error");
@@ -244,7 +423,7 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   
   // Function to display Claude's analysis results
-  function displayAnalysisResults(analysis) {
+  function displayAnalysisResults(analysis, requestName, color) {
     try {
       // Show the analysis container
       analysisContainer.style.display = 'block';
@@ -252,22 +431,20 @@ document.addEventListener('DOMContentLoaded', function() {
       // Clear previous results
       analysisResultsDiv.innerHTML = '';
       
-      // Get the content from Claude's response
-      const analysisText = analysis.content[0].text;
-      
-      // Get the block ID if available
-      const blockId = analysis.blockId !== undefined ? analysis.blockId : 'unknown';
-      
-      // Create a heading showing which block was analyzed
-      const blockHeading = document.createElement('h3');
-      blockHeading.className = 'block-id-heading';
-      blockHeading.textContent = `Analysis of Block #${blockId}`;
-      analysisResultsDiv.appendChild(blockHeading);
+      // Create a heading showing which request was used
+      const requestHeading = document.createElement('h3');
+      requestHeading.className = 'request-heading';
+      requestHeading.innerHTML = `
+        <span class="color-indicator" style="background-color: ${color};"></span>
+        Analysis using "${requestName}"
+      `;
+      analysisResultsDiv.appendChild(requestHeading);
       
       // Create a div for the analysis
       const analysisDiv = document.createElement('div');
-      analysisDiv.className = 'claude-analysis';
-      analysisDiv.innerHTML = `<p>${analysisText.replace(/\n/g, '<br>')}</p>`;
+      analysisDiv.className = 'analysis-section';
+      analysisDiv.style.borderLeftColor = color;
+      analysisDiv.innerHTML = `<p>${analysis.content[0].text.replace(/\n/g, '<br>')}</p>`;
       
       // Add to the results div
       analysisResultsDiv.appendChild(analysisDiv);
@@ -289,6 +466,58 @@ document.addEventListener('DOMContentLoaded', function() {
     // Call the original function
     originalDisplayTextBlocks(textBlocks, container, toggleButton);
   };
+
+  // Listen for status updates from content script
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "updateStatus") {
+      // Check if this is a progress update (contains "Analyzing block")
+      if (message.message.includes("Analyzing block")) {
+        // Create stop button if it doesn't exist
+        let stopButton = document.getElementById('stopAnalysis');
+        if (!stopButton) {
+          stopButton = document.createElement('button');
+          stopButton.id = 'stopAnalysis';
+          stopButton.textContent = 'Stop Analysis';
+          stopButton.style.marginTop = '10px';
+          stopButton.style.backgroundColor = '#dc3545';
+          stopButton.style.color = 'white';
+          stopButton.style.border = 'none';
+          stopButton.style.padding = '5px 10px';
+          stopButton.style.borderRadius = '4px';
+          stopButton.style.cursor = 'pointer';
+          
+          // Add stop button to status div
+          statusDiv.appendChild(stopButton);
+          
+          // Add click handler for stop button
+          stopButton.addEventListener('click', function() {
+            // Get the active tab
+            chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+              if (tabs[0]) {
+                // Send stop message to content script
+                chrome.tabs.sendMessage(
+                  tabs[0].id,
+                  { action: "stopAnalysis" },
+                  function(response) {
+                    // Remove stop button
+                    stopButton.remove();
+                    
+                    // Update status
+                    statusDiv.textContent = "Analysis stopped by user.";
+                    statusDiv.style.backgroundColor = "#f8f9fa";
+                  }
+                );
+              }
+            });
+          });
+        }
+      }
+      
+      // Update status message
+      statusDiv.textContent = message.message;
+      statusDiv.style.backgroundColor = "#fff3cd";
+    }
+  });
 });
 
 // Function to display text blocks in the UI
