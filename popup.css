@@ -48,6 +48,14 @@ button:hover {
   background-color: #3367d6;
 }
 
+.action-button {
+  background-color: #34a853;
+}
+
+.action-button:hover {
+  background-color: #2d9049;
+}
+
 #status {
   margin-top: 15px;
   padding: 10px;
@@ -88,4 +96,6 @@ button:hover {
 .placeholder {
   color: #999;
   font-style: italic;
-} 
+}
+
+/* Styles for highlighted blocks will be injected via JavaScript */ 

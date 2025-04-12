@@ -15,21 +15,90 @@ function extractTextFromDOM() {
   
   // Store the text content of each element
   const textContent = [];
+  let blockCounter = 0;
   
-  textElements.forEach(element => {
-    // Only include elements that have direct text (not just child element text)
-    // and have a reasonable length (to filter out menu items, etc.)
-    const directText = Array.from(element.childNodes)
-      .filter(node => node.nodeType === Node.TEXT_NODE)
-      .map(node => node.textContent.trim())
-      .filter(text => text.length > 20)  // Only include text with more than 20 characters
-      .join(' ');
+  // Helper function to recursively extract text from an element and its descendants
+  function extractTextFromElement(element) {
+    // First check if this element has enough direct text to be considered a block
+    let elementText = "";
+    let hasSubstantialText = false;
     
-    if (directText && directText.length > 0) {
+    // Get all text directly in this element (not in children)
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const trimmedText = node.textContent.trim();
+        if (trimmedText) {
+          elementText += trimmedText + " ";
+        }
+      }
+    }
+    
+    elementText = elementText.trim();
+    
+    // If the element has substantial direct text, add it as a block
+    if (elementText.length >= 100) {
+      hasSubstantialText = true;
+      
+      // Add a unique class to the element for later reference
+      const uniqueClass = `ai-content-block-${blockCounter}`;
+      
+      // Preserve existing classes if they exist
+      if (element.className) {
+        // Check if the element already has the class (avoid duplicates)
+        if (!element.className.includes(uniqueClass)) {
+          element.className = element.className + ' ' + uniqueClass;
+        }
+      } else {
+        element.className = uniqueClass;
+      }
+      
       textContent.push({
-        text: directText,
-        element: element  // Store reference to the element for future highlighting
+        text: elementText,
+        element: element,  // Store reference to the element for future highlighting
+        blockId: blockCounter  // Store the unique ID
       });
+      
+      blockCounter++;
+    }
+    
+    // If this element doesn't have enough text of its own,
+    // or if we want to also process children even if the parent has text,
+    // recursively process child elements that aren't already processed
+    if (!hasSubstantialText || true) {
+      // Get child elements (not text nodes)
+      const childElements = Array.from(element.children);
+      
+      for (const childElement of childElements) {
+        // Skip script, style, and other non-content elements
+        const tagName = childElement.tagName.toLowerCase();
+        if (tagName === 'script' || tagName === 'style' || tagName === 'noscript' || 
+            tagName === 'svg' || tagName === 'path' || tagName === 'iframe') {
+          continue;
+        }
+        
+        // Recursively extract text from the child element
+        extractTextFromElement(childElement);
+      }
+    }
+  }
+  
+  // Process each top-level element
+  textElements.forEach(element => {
+    // Skip elements that are children of elements we've already processed
+    // (to avoid processing the same content multiple times)
+    let isChildOfProcessed = false;
+    let parent = element.parentElement;
+    
+    while (parent) {
+      if (parent.className && parent.className.includes('ai-content-block-')) {
+        isChildOfProcessed = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    
+    if (!isChildOfProcessed) {
+      extractTextFromElement(element);
     }
   });
   
@@ -48,6 +117,45 @@ function getTextContent() {
   return cachedTextContent;
 }
 
+// Function to highlight odd-numbered blocks with a red background
+function highlightOddBlocks() {
+  const blocks = getTextContent();
+  let styleAdded = false;
+  
+  // First, check if our style element already exists
+  let styleEl = document.getElementById('ai-detector-styles');
+  
+  // If not, create it
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'ai-detector-styles';
+    document.head.appendChild(styleEl);
+  }
+  
+  // Set the CSS content to highlight odd blocks
+  styleEl.textContent = `
+    ${Array.from({ length: Math.ceil(blocks.length / 2) }, (_, i) => 
+      `.ai-content-block-${i * 2 + 1}`).join(', ')} {
+      background-color: rgba(255, 0, 0, 0.2) !important;
+      border: 1px solid red !important;
+      padding: 5px !important;
+      transition: background-color 0.3s ease !important;
+    }
+  `;
+  
+  console.log("Applied red background to odd-numbered blocks");
+  return blocks.length;
+}
+
+// Function to reset all highlighting
+function resetHighlighting() {
+  const styleEl = document.getElementById('ai-detector-styles');
+  if (styleEl) {
+    styleEl.textContent = '';
+  }
+  console.log("Reset all block highlighting");
+}
+
 // Set up message listener to communicate with popup.js
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Content script received message:", message);
@@ -62,6 +170,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         success: true,
         textBlocks: textBlocks.map(item => ({
           text: item.text,
+          blockId: item.blockId,
           // We can't send DOM elements through messages, so we're excluding the element property
           // We'll handle highlighting separately later
         }))
@@ -77,6 +186,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Respond to ping messages to check if content script is loaded
   if (message.action === "ping") {
     sendResponse({ success: true, message: "Content script is active" });
+    return true;
+  }
+  
+  // Handle highlighting odd blocks
+  if (message.action === "highlightOdd") {
+    try {
+      const blocksCount = highlightOddBlocks();
+      sendResponse({ 
+        success: true, 
+        message: `Highlighted odd-numbered blocks with red background`,
+        count: blocksCount 
+      });
+    } catch (error) {
+      console.error("Error highlighting odd blocks:", error);
+      sendResponse({ success: false, error: error.message });
+    }
+    return true;
+  }
+  
+  // Handle resetting highlighting
+  if (message.action === "resetHighlighting") {
+    try {
+      resetHighlighting();
+      sendResponse({ success: true, message: "Reset all highlighting" });
+    } catch (error) {
+      console.error("Error resetting highlighting:", error);
+      sendResponse({ success: false, error: error.message });
+    }
     return true;
   }
 });

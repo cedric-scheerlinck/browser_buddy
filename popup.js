@@ -5,8 +5,10 @@ document.addEventListener('DOMContentLoaded', function() {
   const statusDiv = document.getElementById('status');
   const textResultsDiv = document.getElementById('text-results');
   const toggleResultsButton = document.getElementById('toggleResults');
+  const highlightOddButton = document.getElementById('highlightOdd');
+  const actionsDiv = document.getElementById('actions');
   
-  // Add a click event listener to the button
+  // Add a click event listener to the scan button
   scanButton.addEventListener('click', async function() {
     // Update status
     statusDiv.textContent = "Scanning page...";
@@ -15,6 +17,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Clear previous results
     textResultsDiv.innerHTML = '';
     toggleResultsButton.style.display = 'none';
+    actionsDiv.style.display = 'none';
     
     try {
       // Get the active tab
@@ -50,12 +53,18 @@ document.addEventListener('DOMContentLoaded', function() {
           console.log("Content script is available, using message passing");
           const textBlocks = await scanUsingContentScript(tab.id, statusDiv);
           displayTextBlocks(textBlocks, textResultsDiv, toggleResultsButton);
+          
+          // Show actions div after successful scan
+          actionsDiv.style.display = 'block';
         } else {
           // Content script is not available, inject it manually
           console.log("Content script not available, using executeScript fallback");
           const results = await injectContentScriptAsFallback(tab.id, statusDiv);
           if (results && results[0] && results[0].result) {
             displayTextBlocks(results[0].result, textResultsDiv, toggleResultsButton);
+            
+            // Show actions div after successful scan
+            actionsDiv.style.display = 'block';
           }
         }
       } catch (error) {
@@ -63,12 +72,91 @@ document.addEventListener('DOMContentLoaded', function() {
         const results = await injectContentScriptAsFallback(tab.id, statusDiv);
         if (results && results[0] && results[0].result) {
           displayTextBlocks(results[0].result, textResultsDiv, toggleResultsButton);
+          
+          // Show actions div after successful scan
+          actionsDiv.style.display = 'block';
         }
       }
     } catch (error) {
       statusDiv.textContent = "Error: " + error.message;
       statusDiv.style.backgroundColor = "#f8d7da";
       console.error("Error in scan button click handler:", error);
+    }
+  });
+  
+  // Add highlight odd blocks functionality
+  highlightOddButton.addEventListener('click', async function() {
+    try {
+      // Get the active tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      
+      if (!tab) {
+        statusDiv.textContent = "Error: Could not access the current tab.";
+        statusDiv.style.backgroundColor = "#f8d7da";
+        return;
+      }
+      
+      // Check if we're in highlight or reset mode
+      const isResetMode = highlightOddButton.dataset.mode === "reset";
+      
+      // Update button text to indicate processing
+      highlightOddButton.textContent = isResetMode ? "Resetting..." : "Highlighting...";
+      highlightOddButton.disabled = true;
+      
+      // Send appropriate message to content script
+      const action = isResetMode ? "resetHighlighting" : "highlightOdd";
+      
+      chrome.tabs.sendMessage(
+        tab.id,
+        { action: action },
+        function(response) {
+          if (chrome.runtime.lastError) {
+            console.error(`Error sending ${action} message:`, chrome.runtime.lastError);
+            statusDiv.textContent = `Error: Failed to ${isResetMode ? 'reset' : 'highlight'} blocks. ${chrome.runtime.lastError.message}`;
+            statusDiv.style.backgroundColor = "#f8d7da";
+            
+            // Reset button to appropriate state
+            highlightOddButton.textContent = isResetMode ? "Reset Highlighting" : "Highlight Odd Blocks";
+            highlightOddButton.disabled = false;
+            return;
+          }
+          
+          if (response && response.success) {
+            if (isResetMode) {
+              // Change button back to "Highlight Odd Blocks"
+              highlightOddButton.textContent = "Highlight Odd Blocks";
+              highlightOddButton.dataset.mode = "highlight";
+            } else {
+              // Change button to "Reset Highlighting"
+              highlightOddButton.textContent = "Reset Highlighting";
+              highlightOddButton.dataset.mode = "reset";
+            }
+            
+            highlightOddButton.disabled = false;
+            
+            // Update status
+            statusDiv.textContent = response.message;
+            statusDiv.style.backgroundColor = "#d4edda";
+          } else {
+            // Reset button to appropriate state
+            highlightOddButton.textContent = isResetMode ? "Reset Highlighting" : "Highlight Odd Blocks";
+            highlightOddButton.disabled = false;
+            
+            // Update status with error
+            statusDiv.textContent = `Error: Failed to ${isResetMode ? 'reset' : 'highlight'} blocks.`;
+            statusDiv.style.backgroundColor = "#f8d7da";
+          }
+        }
+      );
+    } catch (error) {
+      console.error("Error in highlight button handler:", error);
+      statusDiv.textContent = "Error: " + error.message;
+      statusDiv.style.backgroundColor = "#f8d7da";
+      
+      // Reset button to default state
+      highlightOddButton.textContent = "Highlight Odd Blocks";
+      highlightOddButton.dataset.mode = "highlight";
+      highlightOddButton.disabled = false;
     }
   });
   
@@ -224,25 +312,96 @@ function scanPageForAIContent() {
   try {
     const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, span, div, article, section');
     const textContent = [];
+    let blockCounter = 0;
     
-    textElements.forEach(element => {
-      const directText = Array.from(element.childNodes)
-        .filter(node => node.nodeType === Node.TEXT_NODE)
-        .map(node => node.textContent.trim())
-        .filter(text => text.length > 20)
-        .join(' ');
+    // Helper function to recursively extract text from an element and its descendants
+    function extractTextFromElement(element) {
+      // First check if this element has enough direct text to be considered a block
+      let elementText = "";
+      let hasSubstantialText = false;
       
-      if (directText && directText.length > 0) {
+      // Get all text directly in this element (not in children)
+      for (const node of element.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const trimmedText = node.textContent.trim();
+          if (trimmedText) {
+            elementText += trimmedText + " ";
+            console.log(`Direct text: ${trimmedText}`);
+          }
+        }
+      }
+      
+      elementText = elementText.trim();
+      
+      // If the element has substantial direct text, add it as a block
+      if (elementText.length >= 100) {
+        hasSubstantialText = true;
+        
+        // Add a unique class to the element for later reference
+        const uniqueClass = `ai-content-block-${blockCounter}`;
+        
+        // Preserve existing classes if they exist
+        if (element.className) {
+          // Check if the element already has the class (avoid duplicates)
+          if (!element.className.includes(uniqueClass)) {
+            element.className = element.className + ' ' + uniqueClass;
+          }
+        } else {
+          element.className = uniqueClass;
+        }
+        
         textContent.push({
-          text: directText,
-          // We can't return DOM elements, so just return the text
+          text: elementText,
+          blockId: blockCounter,
         });
+        
+        blockCounter++;
+      }
+      
+      // If this element doesn't have enough text of its own,
+      // or if we want to also process children even if the parent has text,
+      // recursively process child elements that aren't already processed
+      if (!hasSubstantialText || true) {
+        // Get child elements (not text nodes)
+        const childElements = Array.from(element.children);
+        
+        for (const childElement of childElements) {
+          // Skip script, style, and other non-content elements
+          const tagName = childElement.tagName.toLowerCase();
+          if (tagName === 'script' || tagName === 'style' || tagName === 'noscript' || 
+              tagName === 'svg' || tagName === 'path' || tagName === 'iframe') {
+            continue;
+          }
+          
+          // Recursively extract text from the child element
+          extractTextFromElement(childElement);
+        }
+      }
+    }
+    
+    // Process each top-level element
+    textElements.forEach(element => {
+      // Skip elements that are children of elements we've already processed
+      // (to avoid processing the same content multiple times)
+      let isChildOfProcessed = false;
+      let parent = element.parentElement;
+      
+      while (parent) {
+        if (parent.className && parent.className.includes('ai-content-block-')) {
+          isChildOfProcessed = true;
+          break;
+        }
+        parent = parent.parentElement;
+      }
+      
+      if (!isChildOfProcessed) {
+        extractTextFromElement(element);
       }
     });
     
     console.log(`Extracted ${textContent.length} text blocks in fallback mode`);
-    for (let i = 0; i < textContent.length; i++) {
-      console.log(`${JSON.stringify(textContent[i])}`);
+    for (let i = 0; i < Math.min(textContent.length, 5); i++) {
+      console.log(`Block ${i}: ${JSON.stringify(textContent[i]).substring(0, 150)}...`);
     }
     return textContent;
   } catch (error) {
