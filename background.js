@@ -11,6 +11,8 @@ const ENV = {
   isTest: typeof process !== "undefined" && process.env.NODE_ENV === "test",
 };
 
+const TAB_CONTENT_LENGTH_LIMIT = 1000;
+
 // Load dotenv in Node.js environment for testing
 if (ENV.isNode && !ENV.isBrowser) {
   require("dotenv").config();
@@ -227,7 +229,7 @@ async function getAllTabContent() {
               title,
               url,
               metaDescription,
-              content: content.substring(0, 15000), // Limit content length
+              content: content.substring(0, TAB_CONTENT_LENGTH_LIMIT), // Limit content length
             });
             console.log(
               `Added content from tab: ${title} (${url.substring(0, 50)}...)`
@@ -285,7 +287,13 @@ async function callClaudeAPI(prompt, webpageContent) {
     },
   ];
 
-  if (prompt == null || prompt == "" || prompt == undefined) {
+  if (
+    prompt == null ||
+    prompt.startsWith(
+      "Here are the users tabs. The source of the current page is"
+    ) ||
+    prompt == undefined
+  ) {
     system_prompt.push({
       type: "text",
       text: systemPrompt,
@@ -355,7 +363,7 @@ async function callClaudeAPI(prompt, webpageContent) {
     }
 
     // data.content[0].text is the thinking portion.
-    return data.content[1].text;
+    return JSON.parse(data.content[1].text);
   } catch (error) {
     console.error("Claude API error:", error);
     throw error;

@@ -75,52 +75,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // Establish initial connection
 connectToBackground();
 
-// --- Create Toggle Button ---
-const toggleButton = document.createElement("button");
-toggleButton.id = "browser-buddy-toggle";
-toggleButton.textContent = "🤖"; // Use an emoji or text for the button
-
-// Basic Styling for the button
-toggleButton.style.position = "fixed";
-toggleButton.style.bottom = "20px";
-toggleButton.style.right = "20px";
-toggleButton.style.zIndex = "10000"; // Ensure it's on top
-toggleButton.style.backgroundColor = "#007bff";
-toggleButton.style.color = "white";
-toggleButton.style.border = "none";
-toggleButton.style.borderRadius = "50%";
-toggleButton.style.width = "50px";
-toggleButton.style.height = "50px";
-toggleButton.style.fontSize = "24px";
-toggleButton.style.cursor = "pointer";
-toggleButton.style.boxShadow = "0 4px 8px rgba(0,0,0,0.2)";
-
 // --- Create Sidebar ---
 const sidebar = document.createElement("div");
 sidebar.id = "browser-buddy-sidebar";
 
 // Basic Styling for the sidebar
 sidebar.style.position = "fixed";
-sidebar.style.right = "-350px"; // Start off-screen
+sidebar.style.right = "0"; // Start visible on screen
 sidebar.style.top = "0";
 sidebar.style.width = "350px";
 sidebar.style.height = "100vh"; // Full height
 sidebar.style.backgroundColor = "#f8f9fa";
 sidebar.style.borderLeft = "1px solid #dee2e6";
-sidebar.style.zIndex = "9999"; // Just below the button
+sidebar.style.zIndex = "9999";
 sidebar.style.boxShadow = "-2px 0 5px rgba(0,0,0,0.1)";
-sidebar.style.transition = "right 0.3s ease-in-out"; // Smooth transition
 sidebar.style.display = "flex"; // Use flexbox for internal layout
 sidebar.style.flexDirection = "column"; // Stack elements vertically
 
 // --- Add Chatbot UI Placeholders inside Sidebar ---
 sidebar.innerHTML = `
-  <div id="browser-buddy-header" style="padding: 15px; background-color: #e9ecef; border-bottom: 1px solid #dee2e6; text-align: center; font-weight: bold;">
-    Browser Buddy Chat
+  <div id="browser-buddy-header" style="padding: 15px; background-color: #e9ecef; border-bottom: 1px solid #dee2e6; text-align: center; font-weight: bold; display: flex; justify-content: space-between; align-items: center;">
+    <span>Browser Buddy Chat</span>
+    <button id="browser-buddy-analyze" style="padding: 5px 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Analyze Page</button>
   </div>
   <div id="browser-buddy-messages" style="flex-grow: 1; padding: 10px; overflow-y: auto; background-color: white; border-bottom: 1px solid #dee2e6;">
     <!-- Chat messages will appear here -->
-    <p>Welcome! How can I help you understand this page?</p>
   </div>
   <div id="browser-buddy-input-area" style="padding: 10px; background-color: #e9ecef; display: flex;">
     <input type="text" id="browser-buddy-input" placeholder="Ask something..." style="flex-grow: 1; padding: 8px; border: 1px solid #ced4da; border-radius: 4px;">
@@ -128,19 +107,7 @@ sidebar.innerHTML = `
   </div>
 `;
 
-// --- Add Toggle Logic ---
-let isSidebarOpen = false;
-toggleButton.addEventListener("click", () => {
-  isSidebarOpen = !isSidebarOpen;
-  if (isSidebarOpen) {
-    sidebar.style.right = "0"; // Slide in
-  } else {
-    sidebar.style.right = "-350px"; // Slide out
-  }
-});
-
 // --- Append elements to the page ---
-document.body.appendChild(toggleButton);
 document.body.appendChild(sidebar);
 
 console.log("Browser Buddy UI added to page.");
@@ -293,6 +260,7 @@ function extractTextFromDOM() {
 let messagesContainer;
 let inputField;
 let sendButton;
+let analyzeButton;
 
 // --- Store conversation history ---
 let conversationHistory = [];
@@ -302,6 +270,7 @@ function initializeChat() {
   messagesContainer = document.getElementById("browser-buddy-messages");
   inputField = document.getElementById("browser-buddy-input");
   sendButton = document.getElementById("browser-buddy-send");
+  analyzeButton = document.getElementById("browser-buddy-analyze");
 
   // Add event listeners
   sendButton.addEventListener("click", () => handleSendMessage());
@@ -310,6 +279,9 @@ function initializeChat() {
       handleSendMessage();
     }
   });
+
+  // Add event listener for the analyze button
+  analyzeButton.addEventListener("click", () => analyzePageContent());
 
   // Add visual indicator for current mode
   updateButtonState();
@@ -478,6 +450,260 @@ function addMessageToChat(role, text) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
   return messageElement;
+}
+
+// Function to analyze page content when button is clicked
+function analyzePageContent() {
+  const pageContentArray = extractTextFromDOM();
+  const pageContent = pageContentArray.join("\n\n").substring(0, 5000); // Limit to 5000 characters
+
+  // Display loading message
+  const loadingMsgElement = addMessageToChat("assistant", "Analyzing page...");
+
+  // Call Claude API with page information
+  chrome.runtime.sendMessage(
+    {
+      action: "callClaudeAPI",
+      prompt:
+        "Here are the users tabs. The source of the current page is: " +
+        document.title,
+      webpageContent: [],
+    },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        console.error(
+          "Runtime error on initial API call:",
+          chrome.runtime.lastError
+        );
+
+        // Remove loading message and show error
+        if (loadingMsgElement) {
+          messagesContainer.removeChild(loadingMsgElement);
+        }
+
+        addMessageToChat(
+          "assistant",
+          "Sorry, I had trouble connecting. Please try again."
+        );
+        return;
+      }
+
+      console.log("Initial Claude API call completed:", response);
+
+      // Remove loading message
+      if (loadingMsgElement) {
+        messagesContainer.removeChild(loadingMsgElement);
+      }
+
+      if (response.success) {
+        // Check if response data is an array
+        if (Array.isArray(response.data)) {
+          displayConnectionCards(response.data);
+        } else {
+          // Fallback to regular message if not the expected format
+          addMessageToChat("assistant", response.data);
+        }
+      } else {
+        addMessageToChat(
+          "assistant",
+          "Sorry, I encountered an error. Please try again."
+        );
+      }
+    }
+  );
+}
+
+// Function to display connection cards based on API response
+function displayConnectionCards(connections) {
+  // Create container for all cards
+  const cardsContainer = document.createElement("div");
+  cardsContainer.className = "connection-cards-container";
+  cardsContainer.style.width = "100%";
+  cardsContainer.style.padding = "10px";
+  cardsContainer.style.overflow = "auto";
+
+  // Add heading
+  const heading = document.createElement("div");
+  heading.textContent = "Page Connections";
+  heading.style.fontWeight = "bold";
+  heading.style.fontSize = "16px";
+  heading.style.margin = "5px 0 15px 5px";
+  heading.style.color = "#333";
+  cardsContainer.appendChild(heading);
+
+  // No connections found
+  if (!connections || connections.length === 0) {
+    const noConnectionsMsg = document.createElement("div");
+    noConnectionsMsg.textContent = "No relevant connections found.";
+    noConnectionsMsg.style.padding = "10px";
+    noConnectionsMsg.style.color = "#666";
+    cardsContainer.appendChild(noConnectionsMsg);
+    messagesContainer.appendChild(cardsContainer);
+    return;
+  }
+
+  // Create a card for each connection
+  connections.forEach((connection) => {
+    const card = createConnectionCard(connection);
+    cardsContainer.appendChild(card);
+  });
+
+  // Add to messages container
+  messagesContainer.appendChild(cardsContainer);
+
+  // Scroll to the bottom
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// Function to create a material design card for a connection
+function createConnectionCard(connection) {
+  // Create card container
+  const card = document.createElement("div");
+  card.className = "connection-card";
+  card.style.backgroundColor = "white";
+  card.style.borderRadius = "8px";
+  card.style.boxShadow = "0 2px 5px rgba(0,0,0,0.1)";
+  card.style.overflow = "hidden";
+  card.style.marginBottom = "15px";
+  card.style.transition = "box-shadow 0.3s ease";
+
+  // Hover effect
+  card.addEventListener("mouseover", () => {
+    card.style.boxShadow = "0 4px 8px rgba(0,0,0,0.2)";
+  });
+  card.addEventListener("mouseout", () => {
+    card.style.boxShadow = "0 2px 5px rgba(0,0,0,0.1)";
+  });
+
+  // Card header with relevance badge
+  const cardHeader = document.createElement("div");
+  cardHeader.style.padding = "15px 15px 5px 15px";
+  cardHeader.style.display = "flex";
+  cardHeader.style.justifyContent = "space-between";
+  cardHeader.style.alignItems = "flex-start";
+
+  // Heading
+  const headingElement = document.createElement("h3");
+  headingElement.textContent = connection.heading || "Unknown";
+  headingElement.style.margin = "0";
+  headingElement.style.fontSize = "16px";
+  headingElement.style.fontWeight = "600";
+  headingElement.style.color = "#333";
+  cardHeader.appendChild(headingElement);
+
+  // Relevance badge
+  const relevanceBadge = document.createElement("span");
+  const relevanceScore = connection.relevance_score || 0;
+  relevanceBadge.textContent = `${relevanceScore}/10`;
+  relevanceBadge.style.backgroundColor = getRelevanceColor(relevanceScore);
+  relevanceBadge.style.color = "white";
+  relevanceBadge.style.padding = "3px 8px";
+  relevanceBadge.style.borderRadius = "12px";
+  relevanceBadge.style.fontSize = "12px";
+  relevanceBadge.style.fontWeight = "bold";
+  cardHeader.appendChild(relevanceBadge);
+
+  card.appendChild(cardHeader);
+
+  // Subheading if available
+  if (connection.subheading) {
+    const subheading = document.createElement("div");
+    subheading.textContent = connection.subheading;
+    subheading.style.padding = "0 15px 10px 15px";
+    subheading.style.fontSize = "14px";
+    subheading.style.fontWeight = "500";
+    subheading.style.color = "#666";
+    card.appendChild(subheading);
+  }
+
+  // Category and visited time
+  const metaInfo = document.createElement("div");
+  metaInfo.style.display = "flex";
+  metaInfo.style.justifyContent = "space-between";
+  metaInfo.style.padding = "0 15px 10px 15px";
+  metaInfo.style.fontSize = "12px";
+  metaInfo.style.color = "#888";
+
+  // Category
+  const category = document.createElement("span");
+  category.textContent = connection.category || "Uncategorized";
+  category.style.backgroundColor = "#f0f0f0";
+  category.style.padding = "2px 8px";
+  category.style.borderRadius = "4px";
+  metaInfo.appendChild(category);
+
+  // Visited time
+  if (connection.visited_at) {
+    const visited = document.createElement("span");
+    const date = new Date(connection.visited_at);
+    visited.textContent = `Visited: ${date.toLocaleDateString()}`;
+    metaInfo.appendChild(visited);
+  }
+
+  card.appendChild(metaInfo);
+
+  // Content
+  if (connection.content) {
+    const content = document.createElement("div");
+    content.textContent = connection.content;
+    content.style.padding = "10px 15px";
+    content.style.fontSize = "14px";
+    content.style.lineHeight = "1.4";
+    content.style.color = "#333";
+    content.style.borderTop = "1px solid #eee";
+    content.style.borderBottom = "1px solid #eee";
+    card.appendChild(content);
+  }
+
+  // Key connection
+  if (connection.key_connection) {
+    const keyConnection = document.createElement("div");
+    keyConnection.style.padding = "10px 15px";
+    keyConnection.style.fontSize = "13px";
+    keyConnection.style.color = "#444";
+
+    const keyTitle = document.createElement("span");
+    keyTitle.textContent = "Key Connection: ";
+    keyTitle.style.fontWeight = "bold";
+    keyConnection.appendChild(keyTitle);
+
+    const keyText = document.createTextNode(connection.key_connection);
+    keyConnection.appendChild(keyText);
+
+    card.appendChild(keyConnection);
+  }
+
+  // Source link
+  if (connection.source) {
+    const footer = document.createElement("div");
+    footer.style.padding = "10px 15px";
+    footer.style.textAlign = "right";
+
+    const sourceLink = document.createElement("a");
+    sourceLink.href = connection.source;
+    sourceLink.textContent = "View Source";
+    sourceLink.style.color = "#007bff";
+    sourceLink.style.textDecoration = "none";
+    sourceLink.target = "_blank";
+
+    // Add click event to open the link
+    sourceLink.addEventListener("click", (e) => {
+      e.stopPropagation();
+      window.open(connection.source, "_blank");
+    });
+
+    footer.appendChild(sourceLink);
+    card.appendChild(footer);
+  }
+
+  return card;
+}
+
+// Helper function to get color based on relevance score
+function getRelevanceColor(score) {
+  if (score >= 8) return "#4CAF50"; // High relevance - green
+  if (score >= 5) return "#FFC107"; // Medium relevance - amber
+  return "#F44336"; // Low relevance - red
 }
 
 // Initialize the chat on window load
