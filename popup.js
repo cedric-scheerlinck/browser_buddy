@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const actionsDiv = document.getElementById('actions');
   const analysisContainer = document.getElementById('analysis-container');
   const analysisResultsDiv = document.getElementById('analysis-results');
+  const popoutButton = document.getElementById('popoutButton');
   
   // Variable to store the text blocks from the most recent scan
   let latestTextBlocks = [];
@@ -247,6 +248,23 @@ document.addEventListener('DOMContentLoaded', function() {
       statusDiv.textContent = "Error: " + error.message;
       statusDiv.style.backgroundColor = "#f8d7da";
       analyzeWithClaudeButton.disabled = false;
+    }
+  });
+  
+  // Add popout button functionality
+  popoutButton.addEventListener('click', async function() {
+    try {
+      // Create a new window with popup content
+      chrome.windows.create({
+        url: chrome.runtime.getURL('popup.html'),
+        type: 'popup',
+        width: 600,
+        height: 700
+      });
+    } catch (error) {
+      console.error("Error opening popup window:", error);
+      statusDiv.textContent = "Error opening popup window: " + error.message;
+      statusDiv.style.backgroundColor = "#f8d7da";
     }
   });
   

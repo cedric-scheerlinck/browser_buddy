@@ -171,6 +171,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           dryRun: response.dryRun,
           analysisTextPreview: result.content[0].text.substring(0, 100) + '...'
         });
+        
         sendResponse(response);
       })
       .catch(error => {

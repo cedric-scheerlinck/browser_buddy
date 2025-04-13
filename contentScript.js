@@ -17,7 +17,8 @@ try {
 // Function to extract all text from the DOM
 function extractTextFromDOM() {
   // Get all text elements that might contain substantial content
-  const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, span, div, article, section');
+  // const textElements = document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th, span, div, article, section');
+  const textElements = document.querySelectorAll('p');
   
   // Store the text content of each element
   const textContent = [];
@@ -42,7 +43,7 @@ function extractTextFromDOM() {
     elementText = elementText.trim();
     
     // If the element has substantial direct text, add it as a block
-    if (elementText.length >= 100) {
+    if (elementText.length >= 20) {
       hasSubstantialText = true;
       
       // Add a unique class to the element for later reference
@@ -171,68 +172,80 @@ async function analyzeTextWithClaude(textBlocks, isDryRun = false, blockCount = 
     // Select the blocks to analyze (take the first N blocks based on blockCount)
     const blocksToAnalyze = textBlocks.slice(0, blockCount);
     
-    console.log(`Analyzing ${blockCount} blocks${isDryRun ? " (dry run)" : ""} in parallel...`);
+    console.log(`Analyzing ${blockCount} blocks${isDryRun ? " (dry run)" : ""} with throttling...`);
     
-    // Create an array of promises for each block analysis
-    const analysisPromises = blocksToAnalyze.map(async (blockToAnalyze, index) => {
-      if (!blockToAnalyze || !blockToAnalyze.text) {
-        console.warn(`Block at index ${index} has no text, skipping`);
-        return null;
-      }
+    // Define maximum concurrent requests
+    const MAX_CONCURRENT_REQUESTS = 10; // Process 10 blocks at a time
+    const results = [];
+    
+    // Process blocks in batches to avoid overwhelming Chrome's message system
+    for (let i = 0; i < blocksToAnalyze.length; i += MAX_CONCURRENT_REQUESTS) {
+      const batch = blocksToAnalyze.slice(i, i + MAX_CONCURRENT_REQUESTS);
+      console.log(`Processing batch of ${batch.length} blocks (${i+1} to ${Math.min(i+MAX_CONCURRENT_REQUESTS, blocksToAnalyze.length)} of ${blocksToAnalyze.length})...`);
       
-      // Extract the block ID to associate with the response
-      const blockId = blockToAnalyze.blockId;
-      const blockText = blockToAnalyze.text;
-      
-      console.log(`Requesting analysis for block ${blockId} (${index+1}/${blockCount})${isDryRun ? " (dry run)" : ""}...`);
-      
-      // Prepare the message to send to background script
-      const message = {
-        action: "analyzeWithClaude",
-        blockText: blockText,
-        blockId: blockId,
-        dryRun: isDryRun
-      };
-      
-      // Log what we're sending to the background script
-      console.log("Sending request to background script:", {
-        ...message,
-        blockTextPreview: blockText.length > 100 ? 
-          blockText.substring(0, 100) + '...' : blockText
+      // Create promises for this batch
+      const batchPromises = batch.map(async (blockToAnalyze, batchIndex) => {
+        const index = i + batchIndex; // Global index across all batches
+        if (!blockToAnalyze || !blockToAnalyze.text) {
+          console.warn(`Block at index ${index} has no text, skipping`);
+          return null;
+        }
+        
+        // Extract the block ID to associate with the response
+        const blockId = blockToAnalyze.blockId;
+        const blockText = blockToAnalyze.text;
+        
+        console.log(`Requesting analysis for block ${blockId} (${index+1}/${blockCount})${isDryRun ? " (dry run)" : ""}...`);
+        
+        // Prepare the message to send to background script
+        const message = {
+          action: "analyzeWithClaude",
+          blockText: blockText,
+          blockId: blockId,
+          dryRun: isDryRun
+        };
+        
+        // Log what we're sending to the background script
+        console.log("Sending request to background script:", {
+          ...message,
+          blockTextPreview: blockText.length > 100 ? 
+            blockText.substring(0, 100) + '...' : blockText
+        });
+        
+        // Send message to background script to perform the analysis
+        try {
+          return await new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage(message, function(response) {
+              if (chrome.runtime.lastError) {
+                console.error("Error communicating with background script:", chrome.runtime.lastError);
+                reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
+                return;
+              }
+              
+              if (response && response.success) {
+                console.log(`Received successful response from background script for block ${blockId}`);
+                resolve(response.analysis);
+              } else {
+                console.error("Received error response from background script:", response?.error || "Unknown error");
+                reject(new Error(response ? response.error : "Unknown error from background script"));
+              }
+            });
+          });
+        } catch (error) {
+          console.error(`Error analyzing block ${blockId}:`, error);
+          return null; // Return null for failed blocks so we can filter them out later
+        }
       });
       
-      // Send message to background script to perform the analysis
-      try {
-        return await new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage(message, function(response) {
-            if (chrome.runtime.lastError) {
-              console.error("Error communicating with background script:", chrome.runtime.lastError);
-              reject(new Error("Error communicating with background script: " + chrome.runtime.lastError.message));
-              return;
-            }
-            
-            if (response && response.success) {
-              console.log(`Received successful response from background script for block ${blockId}`);
-              resolve(response.analysis);
-            } else {
-              console.error("Received error response from background script:", response?.error || "Unknown error");
-              reject(new Error(response ? response.error : "Unknown error from background script"));
-            }
-          });
-        });
-      } catch (error) {
-        console.error(`Error analyzing block ${blockId}:`, error);
-        return null; // Return null for failed blocks so we can filter them out later
-      }
-    });
-    
-    // Wait for all analysis promises to resolve
-    const results = await Promise.all(analysisPromises);
+      // Wait for all promises in this batch to complete before moving to next batch
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
+    }
     
     // Filter out null results (from blocks that failed or were skipped)
     const validResults = results.filter(result => result !== null);
     
-    console.log(`Completed parallel analysis of ${validResults.length} blocks`);
+    console.log(`Completed throttled analysis of ${validResults.length} blocks`);
     return validResults;
   } catch (error) {
     console.error("Error in analyzeTextWithClaude:", error);
@@ -394,7 +407,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Get the number of blocks to analyze
       const blockCount = message.blockCount || 1;
       
-      console.log(`${isDryRun ? "Dry run" : "Analysis"} requested for ${blockCount} text block(s) in parallel`);
+      console.log(`${isDryRun ? "Dry run" : "Analysis"} requested for ${blockCount} text block(s) using throttled requests`);
       
       // Call the Claude API (or dry run) for the specified number of blocks via background script
       analyzeTextWithClaude(textBlocks, isDryRun, blockCount)
