@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <title>AI Content Detector</title>
   <meta charset="utf-8">
   <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
   <div class="container">
     <h1>AI Content Detector</h1>
@@ -16,7 +18,7 @@
     <p>Click the button below to scan this page for AI-generated content.</p>
     <button id="scanPage">Scan This Page</button>
     <div id="status"></div>
-    
+
     <div id="actions" style="margin-top: 15px; display: none;">
       <button id="highlightOdd" class="action-button">Highlight Odd Blocks</button>
       <div class="option-row">
@@ -29,7 +31,7 @@
       </div>
       <button id="analyzeWithClaude" class="action-button claude-button">Analyze Blocks</button>
     </div>
-    
+
     <div id="results-container">
       <h2>Extracted Text</h2>
       <div id="text-results">
@@ -45,4 +47,5 @@
   </div>
   <script src="popup.js"></script>
 </body>
-</html> 
+
+</html>

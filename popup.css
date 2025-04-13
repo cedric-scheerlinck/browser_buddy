@@ -56,14 +56,6 @@ button:hover {
   background-color: #2d9049;
 }
 
-.claude-button {
-  background-color: #8e44ad;
-}
-
-.claude-button:hover {
-  background-color: #7d3c98;
-}
-
 #status {
   margin-top: 15px;
   padding: 10px;
@@ -74,12 +66,12 @@ button:hover {
   color: #444;
 }
 
-#results-container, #analysis-container {
+#results-container {
   margin-top: 20px;
   text-align: left;
 }
 
-#text-results, #analysis-results {
+#text-results {
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid #ddd;
@@ -106,75 +98,4 @@ button:hover {
   font-style: italic;
 }
 
-.ai-score {
-  font-weight: bold;
-  padding: 2px 5px;
-  border-radius: 3px;
-  color: white;
-}
-
-.ai-score-high {
-  background-color: #e74c3c;
-}
-
-.ai-score-medium {
-  background-color: #f39c12;
-}
-
-.ai-score-low {
-  background-color: #27ae60;
-}
-
-.analysis-section {
-  margin-bottom: 15px;
-  padding: 10px;
-  border-radius: 4px;
-  background-color: #fff;
-  border-left: 4px solid #ccc;
-}
-
 /* Styles for highlighted blocks will be injected via JavaScript */
-
-.option-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 10px 0;
-}
-
-.option-row input[type="checkbox"] {
-  margin-right: 8px;
-}
-
-.option-row label {
-  font-size: 14px;
-  color: #555;
-}
-
-.top-actions {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 100;
-}
-
-.popout-button {
-  background-color: #f0f0f0;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  padding: 5px 10px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background-color 0.3s;
-}
-
-.popout-button:hover {
-  background-color: #e0e0e0;
-}
-
-.popout-icon {
-  font-weight: bold;
-} 
