@@ -15,7 +15,21 @@ A Chrome extension that detects and highlights AI-generated content on webpages.
 
 ## Installation
 
+### Development Setup
 1. Clone or download this repository to your computer.
+2. Install dependencies with `npm install`.
+3. Create a `.env` file in the root directory with your Claude API key:
+   ```
+   CLAUDE_API_KEY=your_api_key_here
+   ```
+4. Build the extension with `./build.sh`.
+5. Open Chrome and navigate to `chrome://extensions/`.
+6. Enable "Developer mode" by clicking the toggle switch in the top right corner.
+7. Click the "Load unpacked" button.
+8. Navigate to and select the `dist` directory created during the build process.
+
+### Manual Installation
+1. Download the latest release from the releases page.
 2. Open Chrome and navigate to `chrome://extensions/`.
 3. Enable "Developer mode" by clicking the toggle switch in the top right corner.
 4. Click the "Load unpacked" button.

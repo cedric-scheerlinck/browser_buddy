@@ -120,6 +120,7 @@ sidebar.innerHTML = `
   </div>
   <div id="browser-buddy-input-area" style="padding: 10px; background-color: #e9ecef; display: flex;">
     <input type="text" id="browser-buddy-input" placeholder="Ask something..." style="flex-grow: 1; padding: 8px; border: 1px solid #ced4da; border-radius: 4px;">
+    <button id="browser-buddy-all-tabs" style="margin-left: 5px; padding: 8px 12px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">All Tabs</button>
     <button id="browser-buddy-send" style="margin-left: 5px; padding: 8px 12px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Send</button>
   </div>
 `;
@@ -271,26 +272,51 @@ function extractTextFromDOM() {
 let messagesContainer;
 let inputField;
 let sendButton;
+let allTabsButton;
 
 // --- Store conversation history ---
 let conversationHistory = [];
+// Track if we should use all tabs content
+let useAllTabsContent = false;
 
 function initializeChat() {
   // Get references to the chat elements
   messagesContainer = document.getElementById('browser-buddy-messages');
   inputField = document.getElementById('browser-buddy-input');
   sendButton = document.getElementById('browser-buddy-send');
+  allTabsButton = document.getElementById('browser-buddy-all-tabs');
 
   // Add event listeners
-  sendButton.addEventListener('click', handleSendMessage);
+  sendButton.addEventListener('click', () => handleSendMessage(false));
+  allTabsButton.addEventListener('click', () => handleSendMessage(true));
   inputField.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
-      handleSendMessage();
+      handleSendMessage(useAllTabsContent);
     }
   });
+
+  // Add visual indicator for current mode
+  updateButtonState();
 }
 
-function handleSendMessage() {
+function updateButtonState() {
+  if (useAllTabsContent) {
+    allTabsButton.style.backgroundColor = '#218838'; // Darker green
+    allTabsButton.style.boxShadow = 'inset 0 0 5px rgba(0,0,0,0.3)';
+    sendButton.style.backgroundColor = '#007bff'; // Default blue
+    sendButton.style.boxShadow = 'none';
+  } else {
+    allTabsButton.style.backgroundColor = '#28a745'; // Default green
+    allTabsButton.style.boxShadow = 'none';
+    sendButton.style.backgroundColor = '#0069d9'; // Darker blue
+    sendButton.style.boxShadow = 'inset 0 0 5px rgba(0,0,0,0.3)';
+  }
+}
+
+function handleSendMessage(useAllTabs) {
+  useAllTabsContent = useAllTabs;
+  updateButtonState();
+
   const userMessage = inputField.value.trim();
 
   if (!userMessage) return; // Don't send empty messages
@@ -309,7 +335,7 @@ function handleSendMessage() {
   }
 
   // Display loading message
-  const loadingMsgElement = addMessageToChat('assistant', 'Thinking...');
+  const loadingMsgElement = addMessageToChat('assistant', useAllTabsContent ? 'Analyzing all open tabs...' : 'Thinking...');
 
   // Extract page content
   const pageContentArray = extractTextFromDOM();
@@ -323,7 +349,7 @@ function handleSendMessage() {
   conversationHistory.push({ role: 'user', content: userMessage });
 
   // Send message to Claude API
-  sendToClaudeAPI(userMessage, pageContent)
+  sendToClaudeAPI(userMessage, pageContent, useAllTabsContent)
     .then(response => {
       // Remove loading message
       if (loadingMsgElement) {
@@ -349,8 +375,8 @@ function handleSendMessage() {
     });
 }
 
-async function sendToClaudeAPI(userMessage, pageContent) {
-  console.log("Sending message to Claude API");
+async function sendToClaudeAPI(userMessage, pageContent, useAllTabs = false) {
+  console.log(`Sending message to Claude API (useAllTabs: ${useAllTabs})`);
 
   // Create prompt with user message and page content - formatted for the background script to parse
   const prompt = `
@@ -371,7 +397,8 @@ Please respond to the user's query based on the webpage content. Keep your respo
       chrome.runtime.sendMessage({
         action: "callClaudeAPI",
         prompt: prompt,
-        history: conversationHistory
+        history: conversationHistory,
+        useAllTabs: useAllTabs
       }, response => {
         // Check for runtime errors
         if (chrome.runtime.lastError) {

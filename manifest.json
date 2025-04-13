@@ -38,6 +38,7 @@
         "*.html",
         "*.js",
         "*.css",
+        "key.txt",
         "images/*"
       ],
       "matches": [

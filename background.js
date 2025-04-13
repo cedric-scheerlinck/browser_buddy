@@ -8,7 +8,40 @@ const connections = {};
 // Store API key in memory
 let apiKey = '';
 
-// Function to load API key from storage or use a hardcoded one for testing
+// Function to load the Claude API key from key.txt
+async function loadClaudeApiKey() {
+    try {
+        console.log("Loading Claude API key from key.txt...");
+
+        // Get the URL to key.txt
+        const keyUrl = chrome.runtime.getURL('key.txt');
+
+        // Fetch the key.txt file
+        const response = await fetch(keyUrl);
+
+        if (!response.ok) {
+            throw new Error(`Failed to load API key: ${response.status} ${response.statusText}`);
+        }
+
+        // Read the key as text
+        const apiKey = await response.text();
+
+        // Trim any whitespace
+        const trimmedKey = apiKey.trim();
+
+        if (!trimmedKey) {
+            throw new Error("API key is empty. Please add your Claude API key to key.txt");
+        }
+
+        console.log("Claude API key loaded successfully");
+        return trimmedKey;
+    } catch (error) {
+        console.error("Error loading Claude API key:", error);
+        throw error;
+    }
+}
+
+// Function to load API key from storage or use key.txt
 async function loadApiKey() {
     console.log('Attempting to load API key');
 
@@ -23,17 +56,24 @@ async function loadApiKey() {
             }
         }
 
-        // For debugging, directly use the API key as fallback
-        // In production, you should implement a more secure method
-        console.log('API key loaded from fallback');
+        // If not in storage, load from key.txt
+        try {
+            apiKey = await loadClaudeApiKey();
+            console.log('API key loaded from key.txt');
 
-        // Save to storage for future use
-        if (chrome.storage && chrome.storage.local) {
-            await chrome.storage.local.set({ 'claudeApiKey': apiKey });
-            console.log('API key saved to storage');
+            // Save to storage for future use
+            if (chrome.storage && chrome.storage.local) {
+                await chrome.storage.local.set({ 'claudeApiKey': apiKey });
+                console.log('API key saved to storage');
+            }
+
+            return true;
+        } catch (error) {
+            console.error('Failed to load API key from key.txt:', error);
         }
 
-        return true;
+        console.error('No API key found in storage or key.txt');
+        return false;
     } catch (error) {
         console.error('Error loading API key:', error);
         return false;
@@ -92,9 +132,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.action === 'callClaudeAPI') {
         console.log('Calling Claude API with prompt:', message.prompt?.substring(0, 30) + '...');
+        console.log('Using all tabs:', message.useAllTabs ? 'Yes' : 'No');
 
         // Make sure we respond even if there's an error
-        callClaudeAPI(message.prompt, message.history)
+        callClaudeAPI(message.prompt, message.history, message.useAllTabs)
             .then(response => {
                 console.log('Claude API response received');
                 try {
@@ -122,12 +163,124 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
 });
 
+// Function to get content from all open tabs
+async function getAllTabContent() {
+    try {
+        console.log('Getting content from all open tabs...');
+        const tabs = await chrome.tabs.query({});
+        console.log(`Found ${tabs.length} open tabs`);
+
+        const tabsContent = [];
+
+        for (const tab of tabs) {
+            try {
+                // Skip tabs that can't be injected with content scripts
+                if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+                    console.log(`Skipping tab ${tab.id} (${tab.url}) as it cannot be accessed`);
+                    continue;
+                }
+
+                console.log(`Reading content from tab ${tab.id} (${tab.url})`);
+
+                // Execute content script to get the page text
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    function: () => {
+                        // This function runs in the context of the tab
+                        function extractText(element, texts) {
+                            if (!element) return;
+
+                            // Skip invisible elements - only check style for Element nodes (not Text nodes)
+                            if (element.nodeType === Node.ELEMENT_NODE) {
+                                const style = window.getComputedStyle(element);
+                                if (style.display === 'none' || style.visibility === 'hidden') return;
+
+                                // Skip script, style, and other non-content elements
+                                const tagsToSkip = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'PATH'];
+                                if (tagsToSkip.includes(element.tagName)) return;
+                            }
+
+                            // Consider only text nodes that have non-whitespace content
+                            if (element.nodeType === Node.TEXT_NODE) {
+                                const text = element.textContent.trim();
+                                if (text) texts.push(text);
+                                return;
+                            }
+
+                            // Process child nodes - only if this is an element node
+                            if (element.nodeType === Node.ELEMENT_NODE && element.childNodes) {
+                                for (const child of element.childNodes) {
+                                    extractText(child, texts);
+                                }
+                            }
+                        }
+
+                        const texts = [];
+
+                        try {
+                            // Start with the document body
+                            if (document.body) {
+                                extractText(document.body, texts);
+                            }
+
+                            // Collect page metadata
+                            const title = document.title || '';
+                            const url = window.location.href || '';
+                            const metaDescription = document.querySelector('meta[name="description"]')?.content || '';
+
+                            return {
+                                title: title,
+                                url: url,
+                                metaDescription: metaDescription,
+                                content: texts.join('\n')
+                            };
+                        } catch (error) {
+                            console.error('Error extracting text:', error);
+                            return {
+                                title: document.title || '',
+                                url: window.location.href || '',
+                                content: `Error extracting content: ${error.message}`
+                            };
+                        }
+                    }
+                });
+
+                if (results && results[0] && results[0].result) {
+                    const { title, url, metaDescription, content } = results[0].result;
+
+                    // Only add if we got meaningful content
+                    if (content && content.length > 0) {
+                        tabsContent.push({
+                            title,
+                            url,
+                            metaDescription,
+                            content: content.substring(0, 15000) // Limit content length
+                        });
+                        console.log(`Added content from tab: ${title} (${url.substring(0, 50)}...)`);
+                        console.log(`Content length: ${content.length} characters`);
+                    } else {
+                        console.log(`No meaningful content extracted from tab: ${title} (${url})`);
+                    }
+                }
+            } catch (error) {
+                console.error(`Error reading tab ${tab.id}:`, error);
+            }
+        }
+
+        return tabsContent;
+    } catch (error) {
+        console.error('Error getting all tab content:', error);
+        return [];
+    }
+}
+
 // Function to call Claude API
-async function callClaudeAPI(prompt, history) {
+async function callClaudeAPI(prompt, history, useAllTabs = false) {
     console.log('callClaudeAPI function called');
     console.log('Prompt length:', prompt?.length || 0, 'characters');
     console.log('Prompt begins with:', prompt?.substring(0, 100) + '...');
     console.log('Prompt ends with:', prompt?.substring(prompt.length - 100) + '...');
+    console.log('Using all tabs content:', useAllTabs ? 'Yes' : 'No');
 
     // Claude API endpoint
     const apiUrl = 'https://api.anthropic.com/v1/messages';
@@ -186,7 +339,11 @@ async function callClaudeAPI(prompt, history) {
     });
     console.log('---- FULL PAGE CONTENT END ----');
 
-    // Create system message content
+    // Get content from all tabs
+    const tabsContent = await getAllTabContent();
+    console.log(`Retrieved content from ${tabsContent.length} tabs`);
+
+    // Create system message content for current page
     const systemContent = `You are Browser Buddy, an AI assistant helping users understand web content. 
 You have access to the current webpage content which is provided below. 
 When answering questions, refer to this content.
@@ -196,7 +353,28 @@ If the information is not in the page content, say so clearly.
 WEBPAGE CONTENT:
 ${pageContent}`;
 
+    // Create system message content for all tabs
+    const systemContentAllTabs = `You are Browser Buddy, an AI assistant helping users understand web content. 
+You have access to the content of all open tabs which is provided below. 
+When answering questions, refer to this content.
+ONLY answer questions based on the information provided in the tabs content.
+If the information is not in any tab content, say so clearly.
+
+ALL TABS CONTENT:
+${tabsContent.map(tab => `
+URL: ${tab.url}
+TITLE: ${tab.title}
+CONTENT:
+${tab.content}
+----------------------------------------
+`).join('\n')}`;
+
     console.log('System content length:', systemContent.length);
+    console.log('System content all tabs length:', systemContentAllTabs.length);
+
+    // Choose which system content to use
+    const finalSystemContent = useAllTabs ? systemContentAllTabs : systemContent;
+    console.log(`Using ${useAllTabs ? 'All Tabs' : 'Current Page'} system content`);
 
     // Prepare messages array for Claude API - user and assistant messages only
     let messages = [];
@@ -237,7 +415,7 @@ ${pageContent}`;
             body: JSON.stringify({
                 model: 'claude-3-7-sonnet-latest',
                 max_tokens: 1000,
-                system: systemContent,  // System content as a top-level parameter
+                system: finalSystemContent,  // Use the selected system content
                 messages: messages
             })
         });
@@ -258,4 +436,4 @@ ${pageContent}`;
         console.error('Error in Claude API call:', error);
         throw error;
     }
-} 
+}
