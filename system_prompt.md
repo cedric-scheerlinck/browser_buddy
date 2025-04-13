@@ -49,3 +49,5 @@ You will receive requests in the following format:
   "content": string // Current webpage content
 }
 ```
+
+Make sure to only include the json in the final response.

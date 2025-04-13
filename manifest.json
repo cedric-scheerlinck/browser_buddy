@@ -38,7 +38,9 @@
         "*.html",
         "*.js",
         "*.css",
-        "images/*"
+        "images/*",
+        ".env",
+        "system_prompt.md"
       ],
       "matches": [
         "<all_urls>"

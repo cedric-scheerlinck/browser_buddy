@@ -1,3 +1,3 @@
 #!/bin/bash
 
-node tests/claude_api_test.js
+npx jest tests/claude_api.test.js 
